@@ -127,6 +127,20 @@ LUNASVG_API bool lunasvg_add_font_face_from_file(const char* family, bool bold, 
 LUNASVG_API bool lunasvg_add_font_face_from_data(const char* family, bool bold, bool italic, const void* data, size_t length, lunasvg_destroy_func_t destroy_func, void* closure);
 
 /**
+* @brief Add a font face of a font collection (`.ttc`, `.otc`) from memory to the cache.
+* @param family The name of the font family. If an empty string is provided, the font will act as a fallback.
+* @param bold Use `true` for bold, `false` otherwise.
+* @param italic Use `true` for italic, `false` otherwise.
+* @param data A pointer to the memory buffer containing the font data.
+* @param length The size of the memory buffer in bytes.
+* @param index The index of the font face within the collection, `0` for a single font file.
+* @param destroy_func Callback function to free the memory buffer when it is no longer needed.
+* @param closure User-defined pointer passed to the `destroy_func` callback.
+* @return `true` if the font face was successfully added to the cache, `false` otherwise.
+*/
+LUNASVG_API bool lunasvg_add_font_face_from_collection_data(const char* family, bool bold, bool italic, const void* data, size_t length, int index, lunasvg_destroy_func_t destroy_func, void* closure);
+
+/**
 * @brief Callback that selects a font for a character that no font of the `font-family` list covers.
 * @param codepoint The Unicode code point of the character.
 * @param bold `true` if a bold font is requested, `false` otherwise.

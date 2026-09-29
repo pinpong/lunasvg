@@ -402,8 +402,8 @@ class FontFace {
 public:
     FontFace() = default;
     explicit FontFace(plutovg_font_face_t* face);
-    FontFace(const void* data, size_t length, plutovg_destroy_func_t destroy_func, void* closure);
-    FontFace(const char* filename);
+    FontFace(const void* data, size_t length, plutovg_destroy_func_t destroy_func, void* closure, int ttcindex = 0);
+    FontFace(const char* filename, int ttcindex = 0);
     FontFace(const FontFace& face);
     FontFace(FontFace&& face);
     ~FontFace();

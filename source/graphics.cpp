@@ -369,13 +369,13 @@ FontFace::FontFace(plutovg_font_face_t* face)
 {
 }
 
-FontFace::FontFace(const void* data, size_t length, plutovg_destroy_func_t destroy_func, void* closure)
-    : m_face(plutovg_font_face_load_from_data(data, length, 0, destroy_func, closure))
+FontFace::FontFace(const void* data, size_t length, plutovg_destroy_func_t destroy_func, void* closure, int ttcindex)
+    : m_face(plutovg_font_face_load_from_data(data, length, ttcindex, destroy_func, closure))
 {
 }
 
-FontFace::FontFace(const char* filename)
-    : m_face(plutovg_font_face_load_from_file(filename, 0))
+FontFace::FontFace(const char* filename, int ttcindex)
+    : m_face(plutovg_font_face_load_from_file(filename, ttcindex))
 {
 }
 

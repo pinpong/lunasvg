@@ -26,6 +26,11 @@ bool lunasvg_add_font_face_from_data(const char* family, bool bold, bool italic,
     return lunasvg::fontFaceCache()->addFontFace(family, bold, italic, lunasvg::FontFace(data, length, destroy_func, closure));
 }
 
+bool lunasvg_add_font_face_from_collection_data(const char* family, bool bold, bool italic, const void* data, size_t length, int index, lunasvg_destroy_func_t destroy_func, void* closure)
+{
+    return lunasvg::fontFaceCache()->addFontFace(family, bold, italic, lunasvg::FontFace(data, length, destroy_func, closure, index));
+}
+
 void lunasvg_set_fallback_font_func(lunasvg_fallback_font_func_t func, void* closure)
 {
     lunasvg::fontFaceCache()->setFallbackFontFunc(func, closure);
