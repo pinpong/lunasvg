@@ -480,15 +480,15 @@ bool FontFaceCache::getTextImage(const void* data, int index, const std::u32stri
     return func && func(data, index, reinterpret_cast<const uint32_t*>(text.data()), text.length(), size, weight, italic, color, advance, image, m_textImageClosure.load());
 }
 
-FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const
+FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language, const std::string& family) const
 {
     auto func = m_fallbackFontFunc.load();
     if(func == nullptr)
         return FontFace();
-    auto family = func(codepoint, weight, italic, language.c_str(), m_fallbackFontClosure.load());
-    if(family == nullptr)
+    auto fallbackFamily = func(codepoint, weight, italic, language.c_str(), family.c_str(), m_fallbackFontClosure.load());
+    if(fallbackFamily == nullptr)
         return FontFace();
-    if(auto face = plutovg_font_face_cache_match(m_cache, family, weight, italic))
+    if(auto face = plutovg_font_face_cache_match(m_cache, fallbackFamily, weight, italic))
         return FontFace(face);
     return FontFace();
 }
@@ -639,7 +639,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         }
 
         static const std::string emojiLanguage("und-Zsye");
-        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic(), emojiPresentation ? emojiLanguage : font.language());
+        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic(), emojiPresentation ? emojiLanguage : font.language(), font.family());
         if(fallbackFace.isNull() && emojiPresentation) {
             for(size_t index = 0; index < font.hbFonts().size(); ++index) {
                 if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
@@ -1017,8 +1017,8 @@ static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, c
 
 #endif // LUNASVG_ENABLE_TEXT_SHAPING
 
-Font::Font(const FontFace& face, float size, int weight, bool italic, const std::string& language, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
-    : m_face(face), m_size(size), m_weight(weight), m_italic(italic), m_language(language)
+Font::Font(const FontFace& face, float size, int weight, bool italic, const std::string& language, const std::string& family, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
+    : m_face(face), m_size(size), m_weight(weight), m_italic(italic), m_language(language), m_family(family)
 {
     if(m_size > 0.f && !m_face.isNull()) {
         plutovg_font_face_get_metrics(m_face.get(), m_size, &m_ascent, &m_descent, &m_lineGap, nullptr);

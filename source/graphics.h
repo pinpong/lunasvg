@@ -431,7 +431,7 @@ public:
     void setTextImageFunc(lunasvg_text_image_func_t func, void* closure);
     bool hasTextImageFunc() const { return m_textImageFunc.load() != nullptr; }
     bool getTextImage(const void* data, int index, const std::u32string_view& text, float size, int weight, bool italic, uint32_t color, float* advance, lunasvg_text_image_t* image) const;
-    FontFace getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const;
+    FontFace getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language, const std::string& family) const;
 
 private:
     FontFaceCache();
@@ -448,7 +448,7 @@ FontFaceCache* fontFaceCache();
 class Font {
 public:
     Font() = default;
-    Font(const FontFace& face, float size, int weight = 400, bool italic = false, const std::string& language = {}, const std::vector<FontFace>& fallbackFaces = {});
+    Font(const FontFace& face, float size, int weight = 400, bool italic = false, const std::string& language = {}, const std::string& family = {}, const std::vector<FontFace>& fallbackFaces = {});
 
     float ascent() const { return m_ascent; }
     float descent() const { return m_descent; }
@@ -462,6 +462,7 @@ public:
     float size() const { return m_size; }
     int weight() const { return m_weight; }
     const std::string& language() const { return m_language; }
+    const std::string& family() const { return m_family; }
     bool italic() const { return m_italic; }
 
     const std::vector<std::shared_ptr<hb_font_t>>& hbFonts() const { return m_hbFonts; }
@@ -475,6 +476,7 @@ private:
     int m_weight = 400;
     bool m_italic = false;
     std::string m_language;
+    std::string m_family;
     float m_ascent = 0.f;
     float m_descent = 0.f;
     float m_lineGap = 0.f;
