@@ -830,6 +830,16 @@ PLUTOVG_API void plutovg_font_face_destroy(plutovg_font_face_t* face);
 PLUTOVG_API int plutovg_font_face_get_reference_count(const plutovg_font_face_t* face);
 
 /**
+ * @brief Retrieves the font data of a font face.
+ *
+ * @param face A pointer to a `plutovg_font_face_t` object.
+ * @param length Pointer to store the length of the font data in bytes.
+ * @param ttcindex Pointer to store the index of the font face within a TrueType Collection.
+ * @return A pointer to the font data, valid as long as the font face is alive.
+ */
+PLUTOVG_API const void* plutovg_font_face_get_data(const plutovg_font_face_t* face, unsigned int* length, int* ttcindex);
+
+/**
  * @brief Retrieves metrics for a font face at a specified size.
  *
  * @param face A pointer to a `plutovg_font_face_t` object.
