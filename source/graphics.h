@@ -428,7 +428,7 @@ public:
 
     ~FontFaceCache();
     void setFallbackFontFunc(lunasvg_fallback_font_func_t func, void* closure);
-    FontFace getFallbackFontFace(uint32_t codepoint, int weight, bool italic) const;
+    FontFace getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const;
 
 private:
     FontFaceCache();
@@ -443,7 +443,7 @@ FontFaceCache* fontFaceCache();
 class Font {
 public:
     Font() = default;
-    Font(const FontFace& face, float size, int weight = 400, bool italic = false, const std::vector<FontFace>& fallbackFaces = {});
+    Font(const FontFace& face, float size, int weight = 400, bool italic = false, const std::string& language = {}, const std::vector<FontFace>& fallbackFaces = {});
 
     float ascent() const { return m_ascent; }
     float descent() const { return m_descent; }
@@ -456,6 +456,7 @@ public:
     const FontFace& face() const { return m_face; }
     float size() const { return m_size; }
     int weight() const { return m_weight; }
+    const std::string& language() const { return m_language; }
     bool italic() const { return m_italic; }
 
     const std::vector<std::shared_ptr<hb_font_t>>& hbFonts() const { return m_hbFonts; }
@@ -468,6 +469,7 @@ private:
     float m_size = 0.f;
     int m_weight = 400;
     bool m_italic = false;
+    std::string m_language;
     float m_ascent = 0.f;
     float m_descent = 0.f;
     float m_lineGap = 0.f;

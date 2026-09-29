@@ -435,6 +435,7 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
     , m_marker_mid(parent.marker_mid())
     , m_marker_end(parent.marker_end())
     , m_font_family(parent.font_family())
+    , m_lang(parent.lang())
 {
     for(const auto& attribute : element->attributes()) {
         std::string_view input(attribute.value());
@@ -562,6 +563,10 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
         case PropertyID::Font_Family:
             m_font_family.assign(input);
             break;
+        case PropertyID::Lang:
+            stripLeadingAndTrailingSpaces(input);
+            m_lang.assign(input);
+            break;
         default:
             break;
         }
@@ -613,7 +618,7 @@ Font SVGLayoutState::font() const
         fallbackFaces.push_back(fontFaceCache()->getFontFace(emptyString, weight, italic));
     }
 
-    return Font(face, m_font_size, weight, italic, fallbackFaces);
+    return Font(face, m_font_size, weight, italic, m_lang, fallbackFaces);
 }
 
 } // namespace lunasvg

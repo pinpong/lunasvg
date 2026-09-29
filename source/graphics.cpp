@@ -467,12 +467,12 @@ void FontFaceCache::setFallbackFontFunc(lunasvg_fallback_font_func_t func, void*
     m_fallbackFontFunc = func;
 }
 
-FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic) const
+FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const
 {
     auto func = m_fallbackFontFunc.load();
     if(func == nullptr)
         return FontFace();
-    auto family = func(codepoint, weight, italic, m_fallbackFontClosure.load());
+    auto family = func(codepoint, weight, italic, language.c_str(), m_fallbackFontClosure.load());
     if(family == nullptr)
         return FontFace();
     if(auto face = plutovg_font_face_cache_match(m_cache, family, weight, italic))
@@ -563,7 +563,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
             }
         }
 
-        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic());
+        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic(), font.language());
         if(!fallbackFace.isNull()) {
             for(size_t index = 0; index < fallbackFaces.size(); ++index) {
                 if(fallbackFaces[index].get() == fallbackFace.get()) {
@@ -608,6 +608,8 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         hb_buffer_add_utf32(buffer, reinterpret_cast<const uint32_t*>(text.data()), text.length(), run.startOffset, run.endOffset - run.startOffset);
         hb_buffer_set_script(buffer, run.script);
         hb_buffer_set_direction(buffer, rightToLeft ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
+        if(!font.language().empty())
+            hb_buffer_set_language(buffer, hb_language_from_string(font.language().data(), font.language().size()));
         hb_buffer_guess_segment_properties(buffer);
         hb_shape(hbFont, buffer, nullptr, 0);
 
@@ -679,8 +681,8 @@ static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, c
 
 #endif // LUNASVG_ENABLE_TEXT_SHAPING
 
-Font::Font(const FontFace& face, float size, int weight, bool italic, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
-    : m_face(face), m_size(size), m_weight(weight), m_italic(italic)
+Font::Font(const FontFace& face, float size, int weight, bool italic, const std::string& language, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
+    : m_face(face), m_size(size), m_weight(weight), m_italic(italic), m_language(language)
 {
     if(m_size > 0.f && !m_face.isNull()) {
         plutovg_font_face_get_metrics(m_face.get(), m_size, &m_ascent, &m_descent, &m_lineGap, nullptr);

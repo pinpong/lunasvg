@@ -145,10 +145,11 @@ LUNASVG_API bool lunasvg_add_font_face_from_collection_data(const char* family, 
 * @param codepoint The Unicode code point of the character.
 * @param weight The requested font weight, from 1 to 1000.
 * @param italic `true` if an italic font is requested, `false` otherwise.
+* @param language The language of the text from `xml:lang` or `lang` as a BCP 47 tag, or an empty string.
 * @param closure User-defined pointer passed to `lunasvg_set_fallback_font_func`.
 * @return The family of a font face in the cache that covers the character, or `NULL`.
 */
-typedef const char* (*lunasvg_fallback_font_func_t)(uint32_t codepoint, int weight, bool italic, void* closure);
+typedef const char* (*lunasvg_fallback_font_func_t)(uint32_t codepoint, int weight, bool italic, const char* language, void* closure);
 
 /**
 * @brief Sets the callback that selects fonts for characters that no font of the `font-family` list covers.

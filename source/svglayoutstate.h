@@ -64,6 +64,7 @@ public:
     const std::string& marker_mid() const { return m_marker_mid; }
     const std::string& marker_end() const { return m_marker_end; }
     const std::string& font_family() const { return m_font_family; }
+    const std::string& lang() const { return m_lang; }
 
     Font font() const;
 
@@ -122,6 +123,7 @@ private:
     std::string m_marker_mid;
     std::string m_marker_end;
     std::string m_font_family;
+    std::string m_lang;
 };
 
 } // namespace lunasvg

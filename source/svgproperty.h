@@ -38,6 +38,7 @@ enum class PropertyID : uint8_t {
     Height,
     Href,
     Id,
+    Lang,
     LengthAdjust,
     Letter_Spacing,
     Marker_End,
