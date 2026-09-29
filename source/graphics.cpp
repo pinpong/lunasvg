@@ -4,6 +4,10 @@
 #include <cfloat>
 #include <cmath>
 
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+#include <hb.h>
+#endif
+
 namespace lunasvg {
 
 const Color Color::Black(0xFF000000);
@@ -470,11 +474,179 @@ FontFaceCache* fontFaceCache()
     return &cache;
 }
 
-Font::Font(const FontFace& face, float size)
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+
+static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face)
+{
+    unsigned int length = 0;
+    int ttcindex = 0;
+    auto data = plutovg_font_face_get_data(face, &length, &ttcindex);
+    auto destroy_func = [](void* closure) { plutovg_font_face_destroy(static_cast<plutovg_font_face_t*>(closure)); };
+    auto blob = hb_blob_create(static_cast<const char*>(data), length, HB_MEMORY_MODE_READONLY, plutovg_font_face_reference(face), destroy_func);
+    auto hbFace = hb_face_create(blob, ttcindex);
+    auto hbFont = hb_font_create(hbFace);
+    hb_face_destroy(hbFace);
+    hb_blob_destroy(blob);
+    return std::shared_ptr<hb_font_t>(hbFont, hb_font_destroy);
+}
+
+static bool isClusterContinuation(hb_unicode_funcs_t* unicodeFuncs, hb_codepoint_t codepoint)
+{
+    switch(hb_unicode_general_category(unicodeFuncs, codepoint)) {
+    case HB_UNICODE_GENERAL_CATEGORY_NON_SPACING_MARK:
+    case HB_UNICODE_GENERAL_CATEGORY_SPACING_MARK:
+    case HB_UNICODE_GENERAL_CATEGORY_ENCLOSING_MARK:
+    case HB_UNICODE_GENERAL_CATEGORY_FORMAT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool isCommonScript(hb_script_t script)
+{
+    return script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED || script == HB_SCRIPT_UNKNOWN;
+}
+
+template<typename GlyphFunc>
+static float shapeText(const Font& font, const std::u32string_view& text, bool rightToLeft, GlyphFunc glyphFunc)
+{
+    struct TextRun {
+        size_t startOffset;
+        size_t endOffset;
+        hb_script_t script;
+        size_t fontIndex;
+    };
+
+    const auto& hbFonts = font.hbFonts();
+    auto unicodeFuncs = hb_unicode_funcs_get_default();
+    auto findFontIndex = [&](hb_codepoint_t codepoint, const TextRun* lastRun) {
+        if(lastRun && isClusterContinuation(unicodeFuncs, codepoint))
+            return lastRun->fontIndex;
+        hb_codepoint_t glyph = 0;
+        for(size_t index = 0; index < hbFonts.size(); ++index) {
+            if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
+                return index;
+            }
+        }
+
+        return lastRun ? lastRun->fontIndex : 0;
+    };
+
+    std::vector<TextRun> runs;
+    for(size_t offset = 0; offset < text.length(); ++offset) {
+        auto lastRun = runs.empty() ? nullptr : &runs.back();
+        auto script = hb_unicode_script(unicodeFuncs, text[offset]);
+        auto fontIndex = findFontIndex(text[offset], lastRun);
+        if(isCommonScript(script))
+            script = lastRun ? lastRun->script : HB_SCRIPT_INVALID;
+        if(lastRun && lastRun->fontIndex == fontIndex && (lastRun->script == script || lastRun->script == HB_SCRIPT_INVALID)) {
+            lastRun->endOffset = offset + 1;
+            lastRun->script = script;
+        } else {
+            runs.push_back({offset, offset + 1, script, fontIndex});
+        }
+    }
+
+    if(rightToLeft)
+        std::reverse(runs.begin(), runs.end());
+    auto buffer = hb_buffer_create();
+    auto advance = 0.f;
+    for(const auto& run : runs) {
+        auto hbFont = hbFonts[run.fontIndex].get();
+        auto scale = font.size() / hb_face_get_upem(hb_font_get_face(hbFont));
+        hb_buffer_clear_contents(buffer);
+        hb_buffer_add_utf32(buffer, reinterpret_cast<const uint32_t*>(text.data()), text.length(), run.startOffset, run.endOffset - run.startOffset);
+        hb_buffer_set_script(buffer, run.script);
+        hb_buffer_set_direction(buffer, rightToLeft ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
+        hb_buffer_guess_segment_properties(buffer);
+        hb_shape(hbFont, buffer, nullptr, 0);
+
+        unsigned int count = 0;
+        auto infos = hb_buffer_get_glyph_infos(buffer, &count);
+        auto positions = hb_buffer_get_glyph_positions(buffer, &count);
+        for(unsigned int i = 0; i < count; ++i) {
+            glyphFunc(hbFont, infos[i].codepoint, advance + positions[i].x_offset * scale, positions[i].y_offset * scale, scale);
+            advance += positions[i].x_advance * scale;
+        }
+    }
+
+    hb_buffer_destroy(buffer);
+    return advance;
+}
+
+struct GlyphOutline {
+    plutovg_canvas_t* canvas;
+    float x;
+    float y;
+    float scale;
+};
+
+static hb_draw_funcs_t* glyphDrawFuncs()
+{
+    static hb_draw_funcs_t* drawFuncs = [] {
+        auto drawFuncs = hb_draw_funcs_create();
+        hb_draw_funcs_set_move_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x, float y, void*) {
+            auto outline = static_cast<GlyphOutline*>(data);
+            plutovg_canvas_move_to(outline->canvas, outline->x + x * outline->scale, outline->y - y * outline->scale);
+        }, nullptr, nullptr);
+
+        hb_draw_funcs_set_line_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x, float y, void*) {
+            auto outline = static_cast<GlyphOutline*>(data);
+            plutovg_canvas_line_to(outline->canvas, outline->x + x * outline->scale, outline->y - y * outline->scale);
+        }, nullptr, nullptr);
+
+        hb_draw_funcs_set_quadratic_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x1, float y1, float x2, float y2, void*) {
+            auto outline = static_cast<GlyphOutline*>(data);
+            plutovg_canvas_quad_to(outline->canvas, outline->x + x1 * outline->scale, outline->y - y1 * outline->scale,
+                outline->x + x2 * outline->scale, outline->y - y2 * outline->scale);
+        }, nullptr, nullptr);
+
+        hb_draw_funcs_set_cubic_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x1, float y1, float x2, float y2, float x3, float y3, void*) {
+            auto outline = static_cast<GlyphOutline*>(data);
+            plutovg_canvas_cubic_to(outline->canvas, outline->x + x1 * outline->scale, outline->y - y1 * outline->scale,
+                outline->x + x2 * outline->scale, outline->y - y2 * outline->scale, outline->x + x3 * outline->scale, outline->y - y3 * outline->scale);
+        }, nullptr, nullptr);
+
+        hb_draw_funcs_set_close_path_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, void*) {
+            auto outline = static_cast<GlyphOutline*>(data);
+            plutovg_canvas_close_path(outline->canvas);
+        }, nullptr, nullptr);
+
+        hb_draw_funcs_make_immutable(drawFuncs);
+        return drawFuncs;
+    }();
+
+    return drawFuncs;
+}
+
+static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft)
+{
+    shapeText(font, text, rightToLeft, [&](hb_font_t* hbFont, uint32_t glyph, float x, float y, float scale) {
+        GlyphOutline outline = {canvas, origin.x + x, origin.y - y, scale};
+        hb_font_draw_glyph(hbFont, glyph, glyphDrawFuncs(), &outline);
+    });
+}
+
+#endif // LUNASVG_ENABLE_TEXT_SHAPING
+
+Font::Font(const FontFace& face, float size, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
     : m_face(face), m_size(size)
 {
     if(m_size > 0.f && !m_face.isNull()) {
         plutovg_font_face_get_metrics(m_face.get(), m_size, &m_ascent, &m_descent, &m_lineGap, nullptr);
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+        std::vector<plutovg_font_face_t*> faces = {m_face.get()};
+        for(const auto& fallbackFace : fallbackFaces) {
+            if(!fallbackFace.isNull() && std::find(faces.begin(), faces.end(), fallbackFace.get()) == faces.end()) {
+                faces.push_back(fallbackFace.get());
+            }
+        }
+
+        for(auto face : faces) {
+            m_hbFonts.push_back(createHbFont(face));
+        }
+#endif
     }
 }
 
@@ -486,8 +658,12 @@ float Font::xHeight() const
     return extents.h;
 }
 
-float Font::measureText(const std::u32string_view& text) const
+float Font::measureText(const std::u32string_view& text, [[maybe_unused]] bool rightToLeft) const
 {
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    if(!m_hbFonts.empty())
+        return shapeText(*this, text, rightToLeft, [](hb_font_t*, uint32_t, float, float, float) {});
+#endif
     if(m_size > 0.f && !m_face.isNull())
         return plutovg_font_face_text_extents(m_face.get(), m_size, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, nullptr);
     return 0;
@@ -563,17 +739,25 @@ void Canvas::strokePath(const Path& path, const StrokeData& strokeData, const Tr
     plutovg_canvas_stroke_path(m_canvas, path.data());
 }
 
-void Canvas::fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform)
+void Canvas::fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform, [[maybe_unused]] bool rightToLeft)
 {
     plutovg_canvas_set_matrix(m_canvas, &m_translation);
     plutovg_canvas_transform(m_canvas, &transform.matrix());
     plutovg_canvas_set_fill_rule(m_canvas, PLUTOVG_FILL_RULE_NON_ZERO);
     plutovg_canvas_set_operator(m_canvas, PLUTOVG_OPERATOR_SRC_OVER);
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    if(!font.hbFonts().empty()) {
+        plutovg_canvas_new_path(m_canvas);
+        addText(m_canvas, text, font, origin, rightToLeft);
+        plutovg_canvas_fill(m_canvas);
+        return;
+    }
+#endif
     plutovg_canvas_set_font(m_canvas, font.face().get(), font.size());
     plutovg_canvas_fill_text(m_canvas, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, origin.x, origin.y);
 }
 
-void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform)
+void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform, [[maybe_unused]] bool rightToLeft)
 {
     plutovg_canvas_set_matrix(m_canvas, &m_translation);
     plutovg_canvas_transform(m_canvas, &transform.matrix());
@@ -584,6 +768,14 @@ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, cons
     plutovg_canvas_set_dash_offset(m_canvas, 0.f);
     plutovg_canvas_set_dash_array(m_canvas, nullptr, 0);
     plutovg_canvas_set_operator(m_canvas, PLUTOVG_OPERATOR_SRC_OVER);
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    if(!font.hbFonts().empty()) {
+        plutovg_canvas_new_path(m_canvas);
+        addText(m_canvas, text, font, origin, rightToLeft);
+        plutovg_canvas_stroke(m_canvas);
+        return;
+    }
+#endif
     plutovg_canvas_set_font(m_canvas, font.face().get(), font.size());
     plutovg_canvas_stroke_text(m_canvas, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, origin.x, origin.y);
 }

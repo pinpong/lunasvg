@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <cassert>
 
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+#include <SheenBidi/SheenBidi.h>
+#endif
+
 namespace lunasvg {
 
 inline const SVGTextNode* toSVGTextNode(const SVGNode* node)
@@ -222,6 +226,45 @@ static void handleTextChunk(SVGTextFragmentIterator begin, SVGTextFragmentIterat
     }
 }
 
+static void reorderTextChunk(SVGTextFragmentIterator begin, SVGTextFragmentIterator end)
+{
+    uint8_t highestLevel = 0;
+    uint8_t lowestOddLevel = UINT8_MAX;
+    std::vector<SVGTextFragment*> visualOrder;
+    std::vector<float> gaps;
+    const SVGTextFragment* lastFragment = nullptr;
+    for(auto it = begin; it != end; ++it) {
+        SVGTextFragment& fragment = *it;
+        highestLevel = std::max(highestLevel, fragment.bidiLevel);
+        if(fragment.bidiLevel & 1)
+            lowestOddLevel = std::min(lowestOddLevel, fragment.bidiLevel);
+        gaps.push_back(lastFragment ? fragment.x - (lastFragment->x + lastFragment->width) : 0.f);
+        visualOrder.push_back(&fragment);
+        lastFragment = &fragment;
+    }
+
+    if(lowestOddLevel == UINT8_MAX || begin->element->isVerticalWritingMode())
+        return;
+    for(auto level = highestLevel; level >= lowestOddLevel; --level) {
+        for(size_t index = 0; index < visualOrder.size(); ++index) {
+            if(visualOrder[index]->bidiLevel < level)
+                continue;
+            auto endIndex = index + 1;
+            while(endIndex < visualOrder.size() && visualOrder[endIndex]->bidiLevel >= level)
+                ++endIndex;
+            std::reverse(visualOrder.begin() + index, visualOrder.begin() + endIndex);
+            index = endIndex;
+        }
+    }
+
+    auto x = begin->x;
+    for(auto fragment : visualOrder) {
+        x += gaps[fragment - &*begin];
+        fragment->x = x;
+        x += fragment->width;
+    }
+}
+
 SVGTextFragmentsBuilder::SVGTextFragmentsBuilder(std::u32string& text, SVGTextFragmentList& fragments)
     : m_text(text), m_fragments(fragments)
 {
@@ -237,6 +280,8 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
         fillCharacterPositions(position);
     }
 
+    fillBidiLevels(textElement);
+
     std::u32string_view wholeText(m_text);
     for(const auto& textPosition : m_textPositions) {
         if(!textPosition.node->isTextNode())
@@ -251,7 +296,7 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
             auto text = wholeText.substr(startOffset, endOffset - startOffset);
             fragment.offset = startOffset;
             fragment.length = text.length();
-            fragment.width = font.measureText(text);
+            fragment.width = font.measureText(text, fragment.bidiLevel & 1);
             fragment.height = font.height() + font.lineGap();
             if(isVerticalText) {
                 m_y += isUprightText ? fragment.height : fragment.width;
@@ -281,8 +326,9 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
             auto dx = characterPosition.dx.value_or(0);
             auto dy = characterPosition.dy.value_or(0);
 
+            auto bidiLevel = m_bidiLevels[textOffset];
             auto shouldStartNewFragment = needsTextLengthSpacing || isVerticalText || applySpacingToNextCharacter
-                || characterPosition.x || characterPosition.y || dx || dy || angle || angle != lastAngle;
+                || characterPosition.x || characterPosition.y || dx || dy || angle || angle != lastAngle || bidiLevel != fragment.bidiLevel;
             if(shouldStartNewFragment && didStartTextFragment) {
                 recordTextFragment(startOffset, textOffset);
                 applySpacingToNextCharacter = false;
@@ -296,6 +342,7 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
                 fragment.x = isVerticalText ? m_x + baselineOffset : m_x;
                 fragment.y = isVerticalText ? m_y : m_y - baselineOffset;
                 fragment.angle = angle;
+                fragment.bidiLevel = bidiLevel;
                 if(isVerticalText) {
                     if(isUprightText) {
                         fragment.y += font.height();
@@ -343,10 +390,12 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
         if(!fragment.startsNewTextChunk)
             continue;
         handleTextChunk(begin, it);
+        reorderTextChunk(begin, it);
         begin = it;
     }
 
     handleTextChunk(begin, it);
+    reorderTextChunk(begin, it);
 }
 
 void SVGTextFragmentsBuilder::removeTrailingCollapsibleSpace()
@@ -419,6 +468,24 @@ void SVGTextFragmentsBuilder::handleElement(const SVGTextPositioningElement* ele
     auto& position = m_textPositions[itemIndex];
     assert(position.node == element);
     position.endOffset = m_text.length();
+}
+
+void SVGTextFragmentsBuilder::fillBidiLevels([[maybe_unused]] const SVGTextElement* textElement)
+{
+    m_bidiLevels.assign(m_text.length(), 0);
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    if(m_text.empty())
+        return;
+    SBCodepointSequence sequence = {SBStringEncodingUTF32, m_text.data(), m_text.length()};
+    auto algorithm = SBAlgorithmCreate(&sequence);
+    auto baseLevel = textElement->direction() == Direction::Rtl ? 1 : 0;
+    auto paragraph = SBAlgorithmCreateParagraph(algorithm, 0, m_text.length(), baseLevel);
+    auto paragraphLength = SBParagraphGetLength(paragraph);
+    auto levels = SBParagraphGetLevelsPtr(paragraph);
+    std::copy(levels, levels + paragraphLength, m_bidiLevels.begin());
+    SBParagraphRelease(paragraph);
+    SBAlgorithmRelease(algorithm);
+#endif
 }
 
 void SVGTextFragmentsBuilder::fillCharacterPositions(const SVGTextPosition& position)
@@ -573,15 +640,15 @@ void SVGTextElement::render(SVGRenderState& state) const
 
         const auto& font = fragment.element->font();
         if(newState.mode() == SVGRenderMode::Clipping) {
-            newState->fillText(text, font, origin, transform);
+            newState->fillText(text, font, origin, transform, fragment.bidiLevel & 1);
         } else {
             const auto& fill = fragment.element->fill();
             const auto& stroke = fragment.element->stroke();
             auto stroke_width = fragment.element->stroke_width();
             if(fill.applyPaint(newState))
-                newState->fillText(text, font, origin, transform);
+                newState->fillText(text, font, origin, transform, fragment.bidiLevel & 1);
             if(stroke.applyPaint(newState)) {
-                newState->strokeText(text, stroke_width, font, origin, transform);
+                newState->strokeText(text, stroke_width, font, origin, transform, fragment.bidiLevel & 1);
             }
         }
     }

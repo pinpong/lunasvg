@@ -577,9 +577,16 @@ Font SVGLayoutState::font() const
     auto bold = m_font_weight == FontWeight::Bold;
     auto italic = m_font_style == FontStyle::Italic;
 
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    constexpr auto collectFallbackFaces = true;
+#else
+    constexpr auto collectFallbackFaces = false;
+#endif
+
     FontFace face;
+    std::vector<FontFace> fallbackFaces;
     std::string_view input(m_font_family);
-    while(!input.empty() && face.isNull()) {
+    while(!input.empty() && (face.isNull() || collectFallbackFaces)) {
         auto family = input.substr(0, input.find(','));
         input.remove_prefix(family.length());
         if(!input.empty() && input.front() == ',')
@@ -595,13 +602,22 @@ Font SVGLayoutState::font() const
 
         std::string font_family(family);
         if(!font_family.empty()) {
-            face = fontFaceCache()->getFontFace(font_family, bold, italic);
+            auto familyFace = fontFaceCache()->getFontFace(font_family, bold, italic);
+            if(face.isNull()) {
+                face = std::move(familyFace);
+            } else if(!familyFace.isNull()) {
+                fallbackFaces.push_back(std::move(familyFace));
+            }
         }
     }
 
-    if(face.isNull())
+    if(face.isNull()) {
         face = fontFaceCache()->getFontFace(emptyString, bold, italic);
-    return Font(face, m_font_size);
+    } else if(collectFallbackFaces) {
+        fallbackFaces.push_back(fontFaceCache()->getFontFace(emptyString, bold, italic));
+    }
+
+    return Font(face, m_font_size, fallbackFaces);
 }
 
 } // namespace lunasvg

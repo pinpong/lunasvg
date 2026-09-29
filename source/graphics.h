@@ -11,6 +11,8 @@
 #include <array>
 #include <string>
 
+struct hb_font_t;
+
 namespace lunasvg {
 
 enum class LineCap : uint8_t {
@@ -435,7 +437,7 @@ FontFaceCache* fontFaceCache();
 class Font {
 public:
     Font() = default;
-    Font(const FontFace& face, float size);
+    Font(const FontFace& face, float size, const std::vector<FontFace>& fallbackFaces = {});
 
     float ascent() const { return m_ascent; }
     float descent() const { return m_descent; }
@@ -443,15 +445,18 @@ public:
     float lineGap() const { return m_lineGap; }
     float xHeight() const;
 
-    float measureText(const std::u32string_view& text) const;
+    float measureText(const std::u32string_view& text, bool rightToLeft = false) const;
 
     const FontFace& face() const { return m_face; }
     float size() const { return m_size; }
+
+    const std::vector<std::shared_ptr<hb_font_t>>& hbFonts() const { return m_hbFonts; }
 
     bool isNull() const { return m_size <= 0.f || m_face.isNull(); }
 
 private:
     FontFace m_face;
+    std::vector<std::shared_ptr<hb_font_t>> m_hbFonts;
     float m_size = 0.f;
     float m_ascent = 0.f;
     float m_descent = 0.f;
@@ -523,8 +528,8 @@ public:
     void fillPath(const Path& path, FillRule fillRule, const Transform& transform);
     void strokePath(const Path& path, const StrokeData& strokeData, const Transform& transform);
 
-    void fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform);
-    void strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform);
+    void fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform, bool rightToLeft = false);
+    void strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform, bool rightToLeft = false);
 
     void clipPath(const Path& path, FillRule clipRule, const Transform& transform);
     void clipRect(const Rect& rect, FillRule clipRule, const Transform& transform);

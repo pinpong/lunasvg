@@ -39,6 +39,7 @@ struct SVGTextFragment {
     size_t offset = 0;
     size_t length = 0;
     bool startsNewTextChunk = false;
+    uint8_t bidiLevel = 0;
     float x = 0;
     float y = 0;
     float width = 0;
@@ -59,7 +60,9 @@ private:
     void removeTrailingCollapsibleSpace();
     void handleElement(const SVGTextPositioningElement* element);
     void fillCharacterPositions(const SVGTextPosition& position);
+    void fillBidiLevels(const SVGTextElement* textElement);
     std::u32string& m_text;
+    std::vector<uint8_t> m_bidiLevels;
     SVGTextFragmentList& m_fragments;
     SVGCharacterPositions m_characterPositions;
     SVGTextPositionList m_textPositions;
