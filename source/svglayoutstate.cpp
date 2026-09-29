@@ -228,25 +228,21 @@ static PointerEvents parsePointerEvents(std::string_view input)
     return parseEnumValue(input, entries, PointerEvents::Auto);
 }
 
-static FontWeight parseFontWeight(std::string_view input)
+static int parseFontWeight(std::string_view input, int parentWeight)
 {
-    static const SVGEnumerationEntry<FontWeight> entries[] = {
-        {FontWeight::Normal, "normal"},
-        {FontWeight::Bold, "bold"},
-        {FontWeight::Bold, "bolder"},
-        {FontWeight::Normal, "lighter"},
-        {FontWeight::Normal, "100"},
-        {FontWeight::Normal, "200"},
-        {FontWeight::Normal, "300"},
-        {FontWeight::Normal, "400"},
-        {FontWeight::Normal, "500"},
-        {FontWeight::Bold, "600"},
-        {FontWeight::Bold, "700"},
-        {FontWeight::Bold, "800"},
-        {FontWeight::Bold, "900"}
-    };
-
-    return parseEnumValue(input, entries, FontWeight::Normal);
+    stripLeadingAndTrailingSpaces(input);
+    if(input == "normal")
+        return 400;
+    if(input == "bold")
+        return 700;
+    if(input == "bolder")
+        return parentWeight < 350 ? 400 : parentWeight < 550 ? 700 : 900;
+    if(input == "lighter")
+        return parentWeight < 550 ? 100 : parentWeight < 750 ? 400 : 700;
+    float weight = 0;
+    if(!parseNumber(input, weight) || !input.empty() || weight < 1 || weight > 1000)
+        return parentWeight;
+    return static_cast<int>(weight);
 }
 
 static FontStyle parseFontStyle(std::string_view input)
@@ -507,7 +503,7 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
             m_clip_rule = parseFillRule(input);
             break;
         case PropertyID::Font_Weight:
-            m_font_weight = parseFontWeight(input);
+            m_font_weight = parseFontWeight(input, m_font_weight);
             break;
         case PropertyID::Font_Style:
             m_font_style = parseFontStyle(input);
@@ -574,7 +570,7 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
 
 Font SVGLayoutState::font() const
 {
-    auto bold = m_font_weight == FontWeight::Bold;
+    auto weight = m_font_weight;
     auto italic = m_font_style == FontStyle::Italic;
 
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
@@ -602,7 +598,7 @@ Font SVGLayoutState::font() const
 
         std::string font_family(family);
         if(!font_family.empty()) {
-            auto familyFace = fontFaceCache()->getFontFace(font_family, bold, italic);
+            auto familyFace = fontFaceCache()->getFontFace(font_family, weight, italic);
             if(face.isNull()) {
                 face = std::move(familyFace);
             } else if(!familyFace.isNull()) {
@@ -612,12 +608,12 @@ Font SVGLayoutState::font() const
     }
 
     if(face.isNull()) {
-        face = fontFaceCache()->getFontFace(emptyString, bold, italic);
+        face = fontFaceCache()->getFontFace(emptyString, weight, italic);
     } else if(collectFallbackFaces) {
-        fallbackFaces.push_back(fontFaceCache()->getFontFace(emptyString, bold, italic));
+        fallbackFaces.push_back(fontFaceCache()->getFontFace(emptyString, weight, italic));
     }
 
-    return Font(face, m_font_size, bold, italic, fallbackFaces);
+    return Font(face, m_font_size, weight, italic, fallbackFaces);
 }
 
 } // namespace lunasvg

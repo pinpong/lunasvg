@@ -424,11 +424,11 @@ private:
 class FontFaceCache {
 public:
     bool addFontFace(const std::string& family, bool bold, bool italic, const FontFace& face);
-    FontFace getFontFace(const std::string& family, bool bold, bool italic) const;
+    FontFace getFontFace(const std::string& family, int weight, bool italic) const;
 
     ~FontFaceCache();
     void setFallbackFontFunc(lunasvg_fallback_font_func_t func, void* closure);
-    FontFace getFallbackFontFace(uint32_t codepoint, bool bold, bool italic) const;
+    FontFace getFallbackFontFace(uint32_t codepoint, int weight, bool italic) const;
 
 private:
     FontFaceCache();
@@ -443,7 +443,7 @@ FontFaceCache* fontFaceCache();
 class Font {
 public:
     Font() = default;
-    Font(const FontFace& face, float size, bool bold = false, bool italic = false, const std::vector<FontFace>& fallbackFaces = {});
+    Font(const FontFace& face, float size, int weight = 400, bool italic = false, const std::vector<FontFace>& fallbackFaces = {});
 
     float ascent() const { return m_ascent; }
     float descent() const { return m_descent; }
@@ -455,7 +455,7 @@ public:
 
     const FontFace& face() const { return m_face; }
     float size() const { return m_size; }
-    bool bold() const { return m_bold; }
+    int weight() const { return m_weight; }
     bool italic() const { return m_italic; }
 
     const std::vector<std::shared_ptr<hb_font_t>>& hbFonts() const { return m_hbFonts; }
@@ -466,7 +466,7 @@ private:
     FontFace m_face;
     std::vector<std::shared_ptr<hb_font_t>> m_hbFonts;
     float m_size = 0.f;
-    bool m_bold = false;
+    int m_weight = 400;
     bool m_italic = false;
     float m_ascent = 0.f;
     float m_descent = 0.f;

@@ -423,9 +423,9 @@ bool FontFaceCache::addFontFace(const std::string& family, bool bold, bool itali
     return !face.isNull();
 }
 
-FontFace FontFaceCache::getFontFace(const std::string& family, bool bold, bool italic) const
+FontFace FontFaceCache::getFontFace(const std::string& family, int weight, bool italic) const
 {
-    if(auto face = plutovg_font_face_cache_get(m_cache, family.data(), bold, italic)) {
+    if(auto face = plutovg_font_face_cache_match(m_cache, family.data(), weight, italic)) {
         return FontFace(face);
     }
 
@@ -448,7 +448,7 @@ FontFace FontFaceCache::getFontFace(const std::string& family, bool bold, bool i
 
     for(auto value : generic_fallbacks) {
         if(value.generic == family || family.empty()) {
-            return FontFace(plutovg_font_face_cache_get(m_cache, value.fallback, bold, italic));
+            return FontFace(plutovg_font_face_cache_match(m_cache, value.fallback, weight, italic));
         }
     }
 
@@ -466,15 +466,15 @@ void FontFaceCache::setFallbackFontFunc(lunasvg_fallback_font_func_t func, void*
     m_fallbackFontFunc = func;
 }
 
-FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, bool bold, bool italic) const
+FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic) const
 {
     auto func = m_fallbackFontFunc.load();
     if(func == nullptr)
         return FontFace();
-    auto family = func(codepoint, bold, italic, m_fallbackFontClosure.load());
+    auto family = func(codepoint, weight, italic, m_fallbackFontClosure.load());
     if(family == nullptr)
         return FontFace();
-    if(auto face = plutovg_font_face_cache_get(m_cache, family, bold, italic))
+    if(auto face = plutovg_font_face_cache_match(m_cache, family, weight, italic))
         return FontFace(face);
     return FontFace();
 }
@@ -550,7 +550,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
             }
         }
 
-        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.bold(), font.italic());
+        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic());
         if(!fallbackFace.isNull()) {
             for(size_t index = 0; index < fallbackFaces.size(); ++index) {
                 if(fallbackFaces[index].get() == fallbackFace.get()) {
@@ -666,8 +666,8 @@ static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, c
 
 #endif // LUNASVG_ENABLE_TEXT_SHAPING
 
-Font::Font(const FontFace& face, float size, bool bold, bool italic, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
-    : m_face(face), m_size(size), m_bold(bold), m_italic(italic)
+Font::Font(const FontFace& face, float size, int weight, bool italic, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
+    : m_face(face), m_size(size), m_weight(weight), m_italic(italic)
 {
     if(m_size > 0.f && !m_face.isNull()) {
         plutovg_font_face_get_metrics(m_face.get(), m_size, &m_ascent, &m_descent, &m_lineGap, nullptr);

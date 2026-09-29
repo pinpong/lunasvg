@@ -981,6 +981,21 @@ PLUTOVG_API bool plutovg_font_face_cache_add_file(plutovg_font_face_cache_t* cac
 PLUTOVG_API plutovg_font_face_t* plutovg_font_face_cache_get(plutovg_font_face_cache_t* cache, const char* family, bool bold, bool italic);
 
 /**
+ * @brief Retrieves the font face of a family that matches a weight and style best.
+ *
+ * Faces are matched like CSS font matching does: by style first, then by weight, where weights between 400 and 500
+ * prefer heavier weights up to 500, lighter weights prefer lighter faces and heavier weights prefer heavier faces.
+ * The weight of a face is the `usWeightClass` of its OS/2 table.
+ *
+ * @param cache A pointer to a `plutovg_font_face_cache_t` object.
+ * @param family The font family name.
+ * @param weight The desired weight, from 1 to 1000.
+ * @param italic Whether the font is italic.
+ * @return A pointer to the matching `plutovg_font_face_t` object, or NULL if not found. The returned face is owned by the cache and must not be destroyed by the caller.
+ */
+PLUTOVG_API plutovg_font_face_t* plutovg_font_face_cache_match(plutovg_font_face_cache_t* cache, const char* family, int weight, bool italic);
+
+/**
  * @brief Load all font faces from a file and add them to the cache.
  *
  * @param cache A pointer to a `plutovg_font_face_cache_t` object.
