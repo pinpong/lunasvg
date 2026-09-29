@@ -179,6 +179,11 @@ struct plutovg_font_face {
     void* closure;
 };
 
+static bool plutovg_font_face_has_outlines(const plutovg_font_face_t* face)
+{
+    return face->info.glyf || face->info.cff.size;
+}
+
 static void plutovg_glyph_cache_init(plutovg_glyph_cache_t* cache)
 {
     cache->glyphs = NULL;
@@ -232,10 +237,15 @@ static plutovg_glyph_t* plutovg_glyph_cache_get(plutovg_glyph_cache_t* cache, pl
         glyph = malloc(sizeof(plutovg_glyph_t));
         glyph->codepoint = codepoint;
         glyph->index = stbtt_FindGlyphIndex(&face->info, codepoint);
-        glyph->nvertices = stbtt_GetGlyphShape(&face->info, glyph->index, &glyph->vertices);
+        glyph->vertices = NULL;
+        glyph->nvertices = 0;
         stbtt_GetGlyphHMetrics(&face->info, glyph->index, &glyph->advance_width, &glyph->left_side_bearing);
-        if(!stbtt_GetGlyphBox(&face->info, glyph->index, &glyph->x1, &glyph->y1, &glyph->x2, &glyph->y2)) {
-            glyph->x1 = glyph->y1 = glyph->x2 = glyph->y2 = 0;
+        glyph->x1 = glyph->y1 = glyph->x2 = glyph->y2 = 0;
+        if(plutovg_font_face_has_outlines(face)) {
+            glyph->nvertices = stbtt_GetGlyphShape(&face->info, glyph->index, &glyph->vertices);
+            if(!stbtt_GetGlyphBox(&face->info, glyph->index, &glyph->x1, &glyph->y1, &glyph->x2, &glyph->y2)) {
+                glyph->x1 = glyph->y1 = glyph->x2 = glyph->y2 = 0;
+            }
         }
 
         glyph->next = cache->glyphs[index];
