@@ -474,10 +474,10 @@ void FontFaceCache::setTextImageFunc(lunasvg_text_image_func_t func, void* closu
     m_textImageFunc = func;
 }
 
-bool FontFaceCache::getTextImage(const void* data, int index, const std::u32string_view& text, float size, uint32_t color, float* advance, lunasvg_text_image_t* image) const
+bool FontFaceCache::getTextImage(const void* data, int index, const std::u32string_view& text, float size, int weight, bool italic, uint32_t color, float* advance, lunasvg_text_image_t* image) const
 {
     auto func = m_textImageFunc.load();
-    return func && func(data, index, reinterpret_cast<const uint32_t*>(text.data()), text.length(), size, color, advance, image, m_textImageClosure.load());
+    return func && func(data, index, reinterpret_cast<const uint32_t*>(text.data()), text.length(), size, weight, italic, color, advance, image, m_textImageClosure.load());
 }
 
 FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const
@@ -600,12 +600,12 @@ static const void* fontData(hb_font_t* font, int& index)
     return data;
 }
 
-static float measurePlatformText(hb_font_t* font, const std::u32string_view& text, float size)
+static float measurePlatformText(hb_font_t* font, const std::u32string_view& text, const Font& style)
 {
     int index = 0;
     auto data = fontData(font, index);
     auto advance = 0.f;
-    fontFaceCache()->getTextImage(data, index, text, size, 0, &advance, nullptr);
+    fontFaceCache()->getTextImage(data, index, text, style.size(), style.weight(), style.italic(), 0, &advance, nullptr);
     return advance;
 }
 
@@ -691,7 +691,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         if(fontFaceCache()->hasTextImageFunc() && isPlatformFont(hbFont, text[run.startOffset])) {
             auto runText = text.substr(run.startOffset, run.endOffset - run.startOffset);
             runFunc(hbFont, runText, advance);
-            advance += measurePlatformText(hbFont, runText, font.size());
+            advance += measurePlatformText(hbFont, runText, font);
             continue;
         }
 
@@ -959,6 +959,8 @@ struct PlatformRun {
     float x;
     float y;
     float size;
+    int weight;
+    bool italic;
 };
 
 // draws text of the platform, requested at the pixel size of the canvas so it stays sharp
@@ -973,7 +975,7 @@ static void paintPlatformRun(plutovg_canvas_t* canvas, const PlatformRun& run, c
     auto data = fontData(run.font, index);
     auto advance = 0.f;
     lunasvg_text_image_t image = {};
-    if(!fontFaceCache()->getTextImage(data, index, run.text, run.size * pixelScale, toArgb(foreground), &advance, &image) || image.data == nullptr)
+    if(!fontFaceCache()->getTextImage(data, index, run.text, run.size * pixelScale, run.weight, run.italic, toArgb(foreground), &advance, &image) || image.data == nullptr)
         return;
     auto surface = plutovg_surface_create_for_data(image.data, image.width, image.height, image.stride);
     auto x = run.x + image.left / pixelScale;
@@ -1006,7 +1008,7 @@ static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, c
 
     auto runFunc = [&](hb_font_t* hbFont, const std::u32string_view& runText, float x) {
         if(platformRuns) {
-            platformRuns->push_back({hb_font_reference(hbFont), std::u32string(runText), origin.x + x, origin.y, font.size()});
+            platformRuns->push_back({hb_font_reference(hbFont), std::u32string(runText), origin.x + x, origin.y, font.size(), font.weight(), font.italic()});
         }
     };
 

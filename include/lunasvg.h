@@ -170,13 +170,15 @@ typedef struct {
 * @param text The characters, in logical order.
 * @param length The number of characters.
 * @param size The font size in pixels.
+* @param weight The requested font weight, from 1 to 1000, to be synthesized if the font has no such weight.
+* @param italic `true` if italic is requested, to be synthesized if the font has no italic.
 * @param color The color for glyphs without own colors, as 0xAARRGGBB.
 * @param advance Receives the advance of the text in pixels.
 * @param image Receives the drawn text, or `NULL` if only the advance is needed.
 * @param closure User-defined pointer passed to `lunasvg_set_text_image_func`.
 * @return `true` if the text was shaped, `false` otherwise.
 */
-typedef bool (*lunasvg_text_image_func_t)(const void* font_data, int font_index, const uint32_t* text, int length, float size, uint32_t color, float* advance, lunasvg_text_image_t* image, void* closure);
+typedef bool (*lunasvg_text_image_func_t)(const void* font_data, int font_index, const uint32_t* text, int length, float size, int weight, bool italic, uint32_t color, float* advance, lunasvg_text_image_t* image, void* closure);
 
 /**
 * @brief Sets the callback that shapes and draws text in fonts whose glyphs lunasvg can't read, like hvgl outlines
