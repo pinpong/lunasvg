@@ -562,17 +562,27 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
     auto hbFonts = font.hbFonts();
     std::vector<FontFace> fallbackFaces;
     auto unicodeFuncs = hb_unicode_funcs_get_default();
-    auto findFontIndex = [&](hb_codepoint_t codepoint, const TextRun* lastRun) {
+    // a character followed by the emoji variation selector asks for a color emoji font first, like browsers do
+    auto findFontIndex = [&](hb_codepoint_t codepoint, const TextRun* lastRun, bool emojiPresentation) {
         if(lastRun && isClusterContinuation(unicodeFuncs, codepoint))
             return lastRun->fontIndex;
         hb_codepoint_t glyph = 0;
-        for(size_t index = 0; index < hbFonts.size(); ++index) {
+        for(size_t index = 0; index < hbFonts.size() && !emojiPresentation; ++index) {
             if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
                 return index;
             }
         }
 
-        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic(), font.language());
+        static const std::string emojiLanguage("und-Zsye");
+        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic(), emojiPresentation ? emojiLanguage : font.language());
+        if(fallbackFace.isNull() && emojiPresentation) {
+            for(size_t index = 0; index < hbFonts.size(); ++index) {
+                if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
+                    return index;
+                }
+            }
+        }
+
         if(!fallbackFace.isNull()) {
             for(size_t index = 0; index < fallbackFaces.size(); ++index) {
                 if(fallbackFaces[index].get() == fallbackFace.get()) {
@@ -595,7 +605,8 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
     for(size_t offset = 0; offset < text.length(); ++offset) {
         auto lastRun = runs.empty() ? nullptr : &runs.back();
         auto script = hb_unicode_script(unicodeFuncs, text[offset]);
-        auto fontIndex = findFontIndex(text[offset], lastRun);
+        auto emojiPresentation = offset + 1 < text.length() && text[offset + 1] == 0xFE0F;
+        auto fontIndex = findFontIndex(text[offset], lastRun, emojiPresentation);
         if(isCommonScript(script))
             script = lastRun ? lastRun->script : HB_SCRIPT_INVALID;
         if(lastRun && lastRun->fontIndex == fontIndex && (lastRun->script == script || lastRun->script == HB_SCRIPT_INVALID)) {
@@ -639,7 +650,8 @@ struct GlyphOutline {
     plutovg_canvas_t* canvas;
     float x;
     float y;
-    float scale;
+    float xScale;
+    float yScale;
 };
 
 static hb_draw_funcs_t* glyphDrawFuncs()
@@ -648,24 +660,24 @@ static hb_draw_funcs_t* glyphDrawFuncs()
         auto drawFuncs = hb_draw_funcs_create();
         hb_draw_funcs_set_move_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x, float y, void*) {
             auto outline = static_cast<GlyphOutline*>(data);
-            plutovg_canvas_move_to(outline->canvas, outline->x + x * outline->scale, outline->y - y * outline->scale);
+            plutovg_canvas_move_to(outline->canvas, outline->x + x * outline->xScale, outline->y + y * outline->yScale);
         }, nullptr, nullptr);
 
         hb_draw_funcs_set_line_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x, float y, void*) {
             auto outline = static_cast<GlyphOutline*>(data);
-            plutovg_canvas_line_to(outline->canvas, outline->x + x * outline->scale, outline->y - y * outline->scale);
+            plutovg_canvas_line_to(outline->canvas, outline->x + x * outline->xScale, outline->y + y * outline->yScale);
         }, nullptr, nullptr);
 
         hb_draw_funcs_set_quadratic_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x1, float y1, float x2, float y2, void*) {
             auto outline = static_cast<GlyphOutline*>(data);
-            plutovg_canvas_quad_to(outline->canvas, outline->x + x1 * outline->scale, outline->y - y1 * outline->scale,
-                outline->x + x2 * outline->scale, outline->y - y2 * outline->scale);
+            plutovg_canvas_quad_to(outline->canvas, outline->x + x1 * outline->xScale, outline->y + y1 * outline->yScale,
+                outline->x + x2 * outline->xScale, outline->y + y2 * outline->yScale);
         }, nullptr, nullptr);
 
         hb_draw_funcs_set_cubic_to_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, float x1, float y1, float x2, float y2, float x3, float y3, void*) {
             auto outline = static_cast<GlyphOutline*>(data);
-            plutovg_canvas_cubic_to(outline->canvas, outline->x + x1 * outline->scale, outline->y - y1 * outline->scale,
-                outline->x + x2 * outline->scale, outline->y - y2 * outline->scale, outline->x + x3 * outline->scale, outline->y - y3 * outline->scale);
+            plutovg_canvas_cubic_to(outline->canvas, outline->x + x1 * outline->xScale, outline->y + y1 * outline->yScale,
+                outline->x + x2 * outline->xScale, outline->y + y2 * outline->yScale, outline->x + x3 * outline->xScale, outline->y + y3 * outline->yScale);
         }, nullptr, nullptr);
 
         hb_draw_funcs_set_close_path_func(drawFuncs, [](hb_draw_funcs_t*, void* data, hb_draw_state_t*, void*) {
@@ -680,10 +692,204 @@ static hb_draw_funcs_t* glyphDrawFuncs()
     return drawFuncs;
 }
 
-static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft, const std::u32string_view& context)
+static bool isColorGlyph(hb_font_t* font, hb_codepoint_t glyph)
+{
+    auto face = hb_font_get_face(font);
+    if(hb_ot_color_glyph_has_paint(face, glyph) || hb_ot_color_glyph_get_layers(face, glyph, 0, nullptr, nullptr) > 0)
+        return true;
+    if(!hb_ot_color_has_png(face))
+        return false;
+    auto png = hb_ot_color_glyph_reference_png(font, glyph);
+    auto hasPng = hb_blob_get_length(png) > 0;
+    hb_blob_destroy(png);
+    return hasPng;
+}
+
+struct GlyphPainter {
+    plutovg_canvas_t* canvas;
+    plutovg_color_t foreground;
+};
+
+static plutovg_color_t paintColor(const GlyphPainter* painter, bool isForeground, hb_color_t color)
+{
+    auto alpha = hb_color_get_alpha(color) / 255.f;
+    if(isForeground)
+        return {painter->foreground.r, painter->foreground.g, painter->foreground.b, painter->foreground.a * alpha};
+    return {hb_color_get_red(color) / 255.f, hb_color_get_green(color) / 255.f, hb_color_get_blue(color) / 255.f, alpha};
+}
+
+// the stops of a color line with their offsets mapped to 0...1, `start` and `end` receive the original range
+static std::vector<plutovg_gradient_stop_t> colorStops(const GlyphPainter* painter, hb_color_line_t* colorLine, float& start, float& end)
+{
+    auto count = hb_color_line_get_color_stops(colorLine, 0, nullptr, nullptr);
+    std::vector<hb_color_stop_t> colorStops(count);
+    hb_color_line_get_color_stops(colorLine, 0, &count, colorStops.data());
+    std::stable_sort(colorStops.begin(), colorStops.end(), [](const auto& a, const auto& b) { return a.offset < b.offset; });
+    start = colorStops.empty() ? 0.f : colorStops.front().offset;
+    end = colorStops.empty() ? 1.f : colorStops.back().offset;
+    auto range = end - start;
+    std::vector<plutovg_gradient_stop_t> stops;
+    for(const auto& colorStop : colorStops) {
+        auto offset = range > 0.f ? (colorStop.offset - start) / range : 0.f;
+        stops.push_back({offset, paintColor(painter, colorStop.is_foreground, colorStop.color)});
+    }
+
+    return stops;
+}
+
+static plutovg_spread_method_t spreadMethod(hb_color_line_t* colorLine)
+{
+    switch(hb_color_line_get_extend(colorLine)) {
+    case HB_PAINT_EXTEND_REPEAT:
+        return PLUTOVG_SPREAD_METHOD_REPEAT;
+    case HB_PAINT_EXTEND_REFLECT:
+        return PLUTOVG_SPREAD_METHOD_REFLECT;
+    default:
+        return PLUTOVG_SPREAD_METHOD_PAD;
+    }
+}
+
+static void paintEverything(plutovg_canvas_t* canvas)
+{
+    plutovg_canvas_fill_rect(canvas, -32768.f, -32768.f, 65536.f, 65536.f);
+}
+
+// color glyphs (COLR, sbix, CBDT) are painted by HarfBuzz; plutovg has no sweep gradients and no group
+// compositing, so sweeps are filled with their middle color and groups are drawn over the backdrop
+static hb_paint_funcs_t* glyphPaintFuncs()
+{
+    static hb_paint_funcs_t* paintFuncs = [] {
+        auto paintFuncs = hb_paint_funcs_create();
+        hb_paint_funcs_set_push_transform_func(paintFuncs, [](hb_paint_funcs_t*, void* data, float xx, float yx, float xy, float yy, float dx, float dy, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            plutovg_matrix_t matrix = {xx, yx, xy, yy, dx, dy};
+            plutovg_canvas_save(painter->canvas);
+            plutovg_canvas_transform(painter->canvas, &matrix);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_pop_transform_func(paintFuncs, [](hb_paint_funcs_t*, void* data, void*) {
+            plutovg_canvas_restore(static_cast<GlyphPainter*>(data)->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_push_clip_glyph_func(paintFuncs, [](hb_paint_funcs_t*, void* data, hb_codepoint_t glyph, hb_font_t* font, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            plutovg_canvas_save(painter->canvas);
+            plutovg_canvas_new_path(painter->canvas);
+            GlyphOutline outline = {painter->canvas, 0.f, 0.f, 1.f, 1.f};
+            hb_font_draw_glyph(font, glyph, glyphDrawFuncs(), &outline);
+            plutovg_canvas_clip(painter->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_push_clip_rectangle_func(paintFuncs, [](hb_paint_funcs_t*, void* data, float xmin, float ymin, float xmax, float ymax, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            plutovg_canvas_save(painter->canvas);
+            plutovg_canvas_clip_rect(painter->canvas, xmin, ymin, xmax - xmin, ymax - ymin);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_pop_clip_func(paintFuncs, [](hb_paint_funcs_t*, void* data, void*) {
+            plutovg_canvas_restore(static_cast<GlyphPainter*>(data)->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_color_func(paintFuncs, [](hb_paint_funcs_t*, void* data, hb_bool_t isForeground, hb_color_t color, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            auto paint = paintColor(painter, isForeground, color);
+            plutovg_canvas_set_color(painter->canvas, &paint);
+            paintEverything(painter->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_image_func(paintFuncs, [](hb_paint_funcs_t*, void* data, hb_blob_t* image, unsigned int width, unsigned int height, hb_tag_t format, float, hb_glyph_extents_t* extents, void*) -> hb_bool_t {
+            auto painter = static_cast<GlyphPainter*>(data);
+            if(format != HB_PAINT_IMAGE_FORMAT_PNG || extents == nullptr || width == 0 || height == 0)
+                return false;
+            unsigned int length = 0;
+            auto imageData = hb_blob_get_data(image, &length);
+            auto surface = plutovg_surface_load_from_image_data(imageData, length);
+            if(surface == nullptr)
+                return false;
+            plutovg_matrix_t matrix;
+            plutovg_matrix_init_translate(&matrix, extents->x_bearing, extents->y_bearing);
+            plutovg_matrix_scale(&matrix, float(extents->width) / plutovg_surface_get_width(surface), float(extents->height) / plutovg_surface_get_height(surface));
+            plutovg_canvas_set_texture(painter->canvas, surface, PLUTOVG_TEXTURE_TYPE_PLAIN, 1.f, &matrix);
+            plutovg_canvas_fill_rect(painter->canvas, extents->x_bearing, extents->y_bearing + extents->height, extents->width, -extents->height);
+            plutovg_surface_destroy(surface);
+            return true;
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_linear_gradient_func(paintFuncs, [](hb_paint_funcs_t*, void* data, hb_color_line_t* colorLine, float x0, float y0, float x1, float y1, float x2, float y2, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            // COLRv1 rotates the gradient line by the third point, p1 moves onto the normal of p0 p2
+            auto dx = x2 - x0, dy = y2 - y0;
+            auto length = dx * dx + dy * dy;
+            if(length > 1e-6f) {
+                auto k = ((x1 - x0) * dx + (y1 - y0) * dy) / length;
+                x1 -= k * dx;
+                y1 -= k * dy;
+            }
+
+            float start, end;
+            auto stops = colorStops(painter, colorLine, start, end);
+            auto sx = x0 + start * (x1 - x0), sy = y0 + start * (y1 - y0);
+            auto ex = x0 + end * (x1 - x0), ey = y0 + end * (y1 - y0);
+            plutovg_canvas_set_linear_gradient(painter->canvas, sx, sy, ex, ey, spreadMethod(colorLine), stops.data(), stops.size(), nullptr);
+            paintEverything(painter->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_radial_gradient_func(paintFuncs, [](hb_paint_funcs_t*, void* data, hb_color_line_t* colorLine, float x0, float y0, float r0, float x1, float y1, float r1, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            float start, end;
+            auto stops = colorStops(painter, colorLine, start, end);
+            auto fx = x0 + start * (x1 - x0), fy = y0 + start * (y1 - y0), fr = r0 + start * (r1 - r0);
+            auto cx = x0 + end * (x1 - x0), cy = y0 + end * (y1 - y0), cr = r0 + end * (r1 - r0);
+            plutovg_canvas_set_radial_gradient(painter->canvas, cx, cy, std::max(cr, 0.f), fx, fy, std::max(fr, 0.f), spreadMethod(colorLine), stops.data(), stops.size(), nullptr);
+            paintEverything(painter->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_set_sweep_gradient_func(paintFuncs, [](hb_paint_funcs_t*, void* data, hb_color_line_t* colorLine, float, float, float, float, void*) {
+            auto painter = static_cast<GlyphPainter*>(data);
+            float start, end;
+            auto stops = colorStops(painter, colorLine, start, end);
+            if(stops.empty())
+                return;
+            plutovg_canvas_set_color(painter->canvas, &stops[stops.size() / 2].color);
+            paintEverything(painter->canvas);
+        }, nullptr, nullptr);
+
+        hb_paint_funcs_make_immutable(paintFuncs);
+        return paintFuncs;
+    }();
+
+    return paintFuncs;
+}
+
+static void paintColorGlyph(plutovg_canvas_t* canvas, hb_font_t* font, hb_codepoint_t glyph, float x, float y, float scale, const plutovg_color_t& foreground)
+{
+    plutovg_canvas_save(canvas);
+    plutovg_matrix_t matrix = {scale, 0.f, 0.f, -scale, x, y};
+    plutovg_canvas_transform(canvas, &matrix);
+    GlyphPainter painter = {canvas, foreground};
+    auto color = HB_COLOR(uint8_t(foreground.b * 255), uint8_t(foreground.g * 255), uint8_t(foreground.r * 255), uint8_t(foreground.a * 255));
+    hb_font_paint_glyph(font, glyph, glyphPaintFuncs(), &painter, 0, color);
+    plutovg_canvas_restore(canvas);
+}
+
+struct ColorGlyph {
+    hb_font_t* font;
+    hb_codepoint_t glyph;
+    float x;
+    float y;
+    float scale;
+};
+
+// adds the outlines of the glyphs to the path, color glyphs go to `colorGlyphs` if given, with a font reference
+static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft, const std::u32string_view& context, std::vector<ColorGlyph>* colorGlyphs)
 {
     shapeText(font, text, rightToLeft, context, [&](hb_font_t* hbFont, uint32_t glyph, float x, float y, float scale) {
-        GlyphOutline outline = {canvas, origin.x + x, origin.y - y, scale};
+        if(colorGlyphs && isColorGlyph(hbFont, glyph)) {
+            colorGlyphs->push_back({hb_font_reference(hbFont), glyph, origin.x + x, origin.y - y, scale});
+            return;
+        }
+
+        GlyphOutline outline = {canvas, origin.x + x, origin.y - y, scale, -scale};
         hb_font_draw_glyph(hbFont, glyph, glyphDrawFuncs(), &outline);
     });
 }
@@ -823,8 +1029,15 @@ void Canvas::fillText(const std::u32string_view& text, const Font& font, const P
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!font.hbFonts().empty()) {
         plutovg_canvas_new_path(m_canvas);
-        addText(m_canvas, text, font, origin, rightToLeft, context);
+        std::vector<ColorGlyph> colorGlyphs;
+        addText(m_canvas, text, font, origin, rightToLeft, context, &colorGlyphs);
         plutovg_canvas_fill(m_canvas);
+        plutovg_color_t foreground = {0.f, 0.f, 0.f, 1.f};
+        plutovg_canvas_get_paint(m_canvas, &foreground);
+        for(const auto& colorGlyph : colorGlyphs) {
+            paintColorGlyph(m_canvas, colorGlyph.font, colorGlyph.glyph, colorGlyph.x, colorGlyph.y, colorGlyph.scale, foreground);
+            hb_font_destroy(colorGlyph.font);
+        }
         return;
     }
 #endif
@@ -846,7 +1059,7 @@ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, cons
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!font.hbFonts().empty()) {
         plutovg_canvas_new_path(m_canvas);
-        addText(m_canvas, text, font, origin, rightToLeft, context);
+        addText(m_canvas, text, font, origin, rightToLeft, context, nullptr);
         plutovg_canvas_stroke(m_canvas);
         return;
     }
