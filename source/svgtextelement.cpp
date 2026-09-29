@@ -7,6 +7,7 @@
 
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
 #include <SheenBidi/SheenBidi.h>
+#include <hb.h>
 #endif
 
 namespace lunasvg {
@@ -99,6 +100,33 @@ static float calculateBaselineOffset(const SVGTextPositioningElement* element)
     }
 
     return offset;
+}
+
+// letter-spacing would break the joining of cursive scripts, CSS Text recommends not to apply it there
+static bool isCursiveCharacter([[maybe_unused]] char32_t character)
+{
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    switch(hb_unicode_script(hb_unicode_funcs_get_default(), character)) {
+    case HB_SCRIPT_ARABIC:
+    case HB_SCRIPT_SYRIAC:
+    case HB_SCRIPT_MONGOLIAN:
+    case HB_SCRIPT_NKO:
+    case HB_SCRIPT_MANDAIC:
+    case HB_SCRIPT_ADLAM:
+    case HB_SCRIPT_HANIFI_ROHINGYA:
+    case HB_SCRIPT_MANICHAEAN:
+    case HB_SCRIPT_PSALTER_PAHLAVI:
+    case HB_SCRIPT_SOGDIAN:
+    case HB_SCRIPT_OLD_UYGHUR:
+    case HB_SCRIPT_CHORASMIAN:
+    case HB_SCRIPT_PHAGS_PA:
+        return true;
+    default:
+        return false;
+    }
+#else
+    return false;
+#endif
 }
 
 static bool needsTextAnchorAdjustment(const SVGTextPositioningElement* element)
@@ -296,7 +324,7 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
             auto text = wholeText.substr(startOffset, endOffset - startOffset);
             fragment.offset = startOffset;
             fragment.length = text.length();
-            fragment.width = font.measureText(text, fragment.bidiLevel & 1);
+            fragment.width = font.measureText(text, fragment.bidiLevel & 1, wholeText);
             fragment.height = font.height() + font.lineGap();
             if(isVerticalText) {
                 m_y += isUprightText ? fragment.height : fragment.width;
@@ -355,7 +383,7 @@ void SVGTextFragmentsBuilder::build(const SVGTextElement* textElement)
                 didStartTextFragment = true;
             }
 
-            auto spacing = element->letter_spacing();
+            auto spacing = isCursiveCharacter(currentCharacter) ? 0.f : element->letter_spacing();
             if(currentCharacter && lastCharacter && element->word_spacing()) {
                 if(currentCharacter == ' ' && lastCharacter != ' ') {
                     spacing += element->word_spacing();
@@ -640,15 +668,15 @@ void SVGTextElement::render(SVGRenderState& state) const
 
         const auto& font = fragment.element->font();
         if(newState.mode() == SVGRenderMode::Clipping) {
-            newState->fillText(text, font, origin, transform, fragment.bidiLevel & 1);
+            newState->fillText(text, font, origin, transform, fragment.bidiLevel & 1, wholeText);
         } else {
             const auto& fill = fragment.element->fill();
             const auto& stroke = fragment.element->stroke();
             auto stroke_width = fragment.element->stroke_width();
             if(fill.applyPaint(newState))
-                newState->fillText(text, font, origin, transform, fragment.bidiLevel & 1);
+                newState->fillText(text, font, origin, transform, fragment.bidiLevel & 1, wholeText);
             if(stroke.applyPaint(newState)) {
-                newState->strokeText(text, stroke_width, font, origin, transform, fragment.bidiLevel & 1);
+                newState->strokeText(text, stroke_width, font, origin, transform, fragment.bidiLevel & 1, wholeText);
             }
         }
     }

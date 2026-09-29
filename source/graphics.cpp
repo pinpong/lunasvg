@@ -540,9 +540,12 @@ static bool isCommonScript(hb_script_t script)
     return script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED || script == HB_SCRIPT_UNKNOWN;
 }
 
+// `text` is a part of `context`, the characters around it shape its ends, like the joining of Arabic letters
 template<typename GlyphFunc>
-static float shapeText(const Font& font, const std::u32string_view& text, bool rightToLeft, GlyphFunc glyphFunc)
+static float shapeText(const Font& font, const std::u32string_view& text, bool rightToLeft, const std::u32string_view& context, GlyphFunc glyphFunc)
 {
+    auto bufferText = context.empty() ? text : context;
+    size_t textOffset = text.data() - bufferText.data();
     struct TextRun {
         size_t startOffset;
         size_t endOffset;
@@ -605,7 +608,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         auto hbFont = hbFonts[run.fontIndex].get();
         auto scale = font.size() / hb_face_get_upem(hb_font_get_face(hbFont));
         hb_buffer_clear_contents(buffer);
-        hb_buffer_add_utf32(buffer, reinterpret_cast<const uint32_t*>(text.data()), text.length(), run.startOffset, run.endOffset - run.startOffset);
+        hb_buffer_add_utf32(buffer, reinterpret_cast<const uint32_t*>(bufferText.data()), bufferText.length(), textOffset + run.startOffset, run.endOffset - run.startOffset);
         hb_buffer_set_script(buffer, run.script);
         hb_buffer_set_direction(buffer, rightToLeft ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
         if(!font.language().empty())
@@ -671,9 +674,9 @@ static hb_draw_funcs_t* glyphDrawFuncs()
     return drawFuncs;
 }
 
-static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft)
+static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft, const std::u32string_view& context)
 {
-    shapeText(font, text, rightToLeft, [&](hb_font_t* hbFont, uint32_t glyph, float x, float y, float scale) {
+    shapeText(font, text, rightToLeft, context, [&](hb_font_t* hbFont, uint32_t glyph, float x, float y, float scale) {
         GlyphOutline outline = {canvas, origin.x + x, origin.y - y, scale};
         hb_font_draw_glyph(hbFont, glyph, glyphDrawFuncs(), &outline);
     });
@@ -709,11 +712,11 @@ float Font::xHeight() const
     return extents.h;
 }
 
-float Font::measureText(const std::u32string_view& text, [[maybe_unused]] bool rightToLeft) const
+float Font::measureText(const std::u32string_view& text, [[maybe_unused]] bool rightToLeft, [[maybe_unused]] const std::u32string_view& context) const
 {
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!m_hbFonts.empty())
-        return shapeText(*this, text, rightToLeft, [](hb_font_t*, uint32_t, float, float, float) {});
+        return shapeText(*this, text, rightToLeft, context, [](hb_font_t*, uint32_t, float, float, float) {});
 #endif
     if(m_size > 0.f && !m_face.isNull())
         return plutovg_font_face_text_extents(m_face.get(), m_size, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, nullptr);
@@ -790,7 +793,7 @@ void Canvas::strokePath(const Path& path, const StrokeData& strokeData, const Tr
     plutovg_canvas_stroke_path(m_canvas, path.data());
 }
 
-void Canvas::fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform, [[maybe_unused]] bool rightToLeft)
+void Canvas::fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform, [[maybe_unused]] bool rightToLeft, [[maybe_unused]] const std::u32string_view& context)
 {
     plutovg_canvas_set_matrix(m_canvas, &m_translation);
     plutovg_canvas_transform(m_canvas, &transform.matrix());
@@ -799,7 +802,7 @@ void Canvas::fillText(const std::u32string_view& text, const Font& font, const P
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!font.hbFonts().empty()) {
         plutovg_canvas_new_path(m_canvas);
-        addText(m_canvas, text, font, origin, rightToLeft);
+        addText(m_canvas, text, font, origin, rightToLeft, context);
         plutovg_canvas_fill(m_canvas);
         return;
     }
@@ -808,7 +811,7 @@ void Canvas::fillText(const std::u32string_view& text, const Font& font, const P
     plutovg_canvas_fill_text(m_canvas, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, origin.x, origin.y);
 }
 
-void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform, [[maybe_unused]] bool rightToLeft)
+void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform, [[maybe_unused]] bool rightToLeft, [[maybe_unused]] const std::u32string_view& context)
 {
     plutovg_canvas_set_matrix(m_canvas, &m_translation);
     plutovg_canvas_transform(m_canvas, &transform.matrix());
@@ -822,7 +825,7 @@ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, cons
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!font.hbFonts().empty()) {
         plutovg_canvas_new_path(m_canvas);
-        addText(m_canvas, text, font, origin, rightToLeft);
+        addText(m_canvas, text, font, origin, rightToLeft, context);
         plutovg_canvas_stroke(m_canvas);
         return;
     }

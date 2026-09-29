@@ -451,7 +451,7 @@ public:
     float lineGap() const { return m_lineGap; }
     float xHeight() const;
 
-    float measureText(const std::u32string_view& text, bool rightToLeft = false) const;
+    float measureText(const std::u32string_view& text, bool rightToLeft = false, const std::u32string_view& context = {}) const;
 
     const FontFace& face() const { return m_face; }
     float size() const { return m_size; }
@@ -540,8 +540,8 @@ public:
     void fillPath(const Path& path, FillRule fillRule, const Transform& transform);
     void strokePath(const Path& path, const StrokeData& strokeData, const Transform& transform);
 
-    void fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform, bool rightToLeft = false);
-    void strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform, bool rightToLeft = false);
+    void fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform, bool rightToLeft = false, const std::u32string_view& context = {});
+    void strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform, bool rightToLeft = false, const std::u32string_view& context = {});
 
     void clipPath(const Path& path, FillRule clipRule, const Transform& transform);
     void clipRect(const Rect& rect, FillRule clipRule, const Transform& transform);
