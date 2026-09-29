@@ -517,6 +517,12 @@ static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face, int we
     if(!variations.empty())
         hb_font_set_variations(hbFont, variations.data(), variations.size());
 
+    // like browsers, bold and oblique are synthesized when the font has no such face
+    if(weight >= 600 && hb_style_get_value(hbFont, HB_STYLE_TAG_WEIGHT) < 600)
+        hb_font_set_synthetic_bold(hbFont, 0.02f, 0.02f, false);
+    if(italic && hb_style_get_value(hbFont, HB_STYLE_TAG_ITALIC) == 0.f && hb_style_get_value(hbFont, HB_STYLE_TAG_SLANT_RATIO) == 0.f)
+        hb_font_set_synthetic_slant(hbFont, 0.25f);
+
     hb_face_destroy(hbFace);
     hb_blob_destroy(blob);
     return std::shared_ptr<hb_font_t>(hbFont, hb_font_destroy);
@@ -706,6 +712,21 @@ Font::Font(const FontFace& face, float size, int weight, bool italic, const std:
 
 float Font::xHeight() const
 {
+#ifdef LUNASVG_ENABLE_TEXT_SHAPING
+    // like browsers: the x-height of the OS/2 table, the height of the "x" glyph, or half an em
+    if(!m_hbFonts.empty()) {
+        auto hbFont = m_hbFonts.front().get();
+        auto scale = m_size / hb_face_get_upem(hb_font_get_face(hbFont));
+        hb_position_t xHeight = 0;
+        if(hb_ot_metrics_get_position(hbFont, HB_OT_METRICS_TAG_X_HEIGHT, &xHeight) && xHeight > 0)
+            return xHeight * scale;
+        hb_codepoint_t glyph = 0;
+        hb_glyph_extents_t extents;
+        if(hb_font_get_nominal_glyph(hbFont, 'x', &glyph) && hb_font_get_glyph_extents(hbFont, glyph, &extents) && extents.y_bearing > 0)
+            return extents.y_bearing * scale;
+        return m_size / 2.f;
+    }
+#endif
     plutovg_rect_t extents = {0};
     if(m_size > 0.f && !m_face.isNull())
         plutovg_font_face_get_glyph_metrics(m_face.get(), m_size, 'x', nullptr, nullptr, &extents);
