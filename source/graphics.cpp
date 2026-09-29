@@ -6,6 +6,7 @@
 
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
 #include <hb.h>
+#include <hb-ot.h>
 #endif
 
 namespace lunasvg {
@@ -495,7 +496,8 @@ FontFaceCache* fontFaceCache()
 
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
 
-static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face)
+// weight and style also select the instance of a variable font with weight, italic or slant axes
+static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face, int weight, bool italic)
 {
     unsigned int length = 0;
     int ttcindex = 0;
@@ -504,6 +506,17 @@ static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face)
     auto blob = hb_blob_create(static_cast<const char*>(data), length, HB_MEMORY_MODE_READONLY, plutovg_font_face_reference(face), destroy_func);
     auto hbFace = hb_face_create(blob, ttcindex);
     auto hbFont = hb_font_create(hbFace);
+    std::vector<hb_variation_t> variations;
+    hb_ot_var_axis_info_t axis;
+    if(hb_ot_var_find_axis_info(hbFace, HB_TAG('w', 'g', 'h', 't'), &axis))
+        variations.push_back({axis.tag, std::clamp<float>(weight, axis.min_value, axis.max_value)});
+    if(italic && hb_ot_var_find_axis_info(hbFace, HB_TAG('i', 't', 'a', 'l'), &axis))
+        variations.push_back({axis.tag, axis.max_value});
+    else if(italic && hb_ot_var_find_axis_info(hbFace, HB_TAG('s', 'l', 'n', 't'), &axis))
+        variations.push_back({axis.tag, std::clamp(-12.f, axis.min_value, axis.max_value)});
+    if(!variations.empty())
+        hb_font_set_variations(hbFont, variations.data(), variations.size());
+
     hb_face_destroy(hbFace);
     hb_blob_destroy(blob);
     return std::shared_ptr<hb_font_t>(hbFont, hb_font_destroy);
@@ -558,7 +571,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
                 }
             }
 
-            auto hbFont = createHbFont(fallbackFace.get());
+            auto hbFont = createHbFont(fallbackFace.get(), font.weight(), font.italic());
             if(hb_font_get_nominal_glyph(hbFont.get(), codepoint, &glyph)) {
                 fallbackFaces.push_back(std::move(fallbackFace));
                 hbFonts.push_back(std::move(hbFont));
@@ -680,7 +693,7 @@ Font::Font(const FontFace& face, float size, int weight, bool italic, [[maybe_un
         }
 
         for(auto face : faces) {
-            m_hbFonts.push_back(createHbFont(face));
+            m_hbFonts.push_back(createHbFont(face, m_weight, m_italic));
         }
 #endif
     }
