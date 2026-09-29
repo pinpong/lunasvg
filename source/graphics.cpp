@@ -4,6 +4,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
 #include <hb.h>
@@ -510,14 +512,31 @@ FontFaceCache* fontFaceCache()
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
 
 // weight and style also select the instance of a variable font with weight, italic or slant axes
+// one HarfBuzz face per font face, HarfBuzz keeps its shape plans and table caches on it; the face keeps the font
+// face alive, so the pointer stays a valid key; the cache lives as long as the process, like the font face cache
+static hb_face_t* referenceHbFace(plutovg_font_face_t* face)
+{
+    static auto& mutex = *new std::mutex;
+    static auto& faces = *new std::unordered_map<plutovg_font_face_t*, hb_face_t*>;
+    std::lock_guard lock(mutex);
+    auto& hbFace = faces[face];
+    if(hbFace == nullptr) {
+        unsigned int length = 0;
+        int ttcindex = 0;
+        auto data = plutovg_font_face_get_data(face, &length, &ttcindex);
+        auto destroy_func = [](void* closure) { plutovg_font_face_destroy(static_cast<plutovg_font_face_t*>(closure)); };
+        auto blob = hb_blob_create(static_cast<const char*>(data), length, HB_MEMORY_MODE_READONLY, plutovg_font_face_reference(face), destroy_func);
+        hbFace = hb_face_create(blob, ttcindex);
+        hb_face_make_immutable(hbFace);
+        hb_blob_destroy(blob);
+    }
+
+    return hb_face_reference(hbFace);
+}
+
 static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face, int weight, bool italic)
 {
-    unsigned int length = 0;
-    int ttcindex = 0;
-    auto data = plutovg_font_face_get_data(face, &length, &ttcindex);
-    auto destroy_func = [](void* closure) { plutovg_font_face_destroy(static_cast<plutovg_font_face_t*>(closure)); };
-    auto blob = hb_blob_create(static_cast<const char*>(data), length, HB_MEMORY_MODE_READONLY, plutovg_font_face_reference(face), destroy_func);
-    auto hbFace = hb_face_create(blob, ttcindex);
+    auto hbFace = referenceHbFace(face);
     auto hbFont = hb_font_create(hbFace);
     std::vector<hb_variation_t> variations;
     hb_ot_var_axis_info_t axis;
@@ -537,7 +556,6 @@ static std::shared_ptr<hb_font_t> createHbFont(plutovg_font_face_t* face, int we
         hb_font_set_synthetic_slant(hbFont, 0.25f);
 
     hb_face_destroy(hbFace);
-    hb_blob_destroy(blob);
     return std::shared_ptr<hb_font_t>(hbFont, hb_font_destroy);
 }
 
