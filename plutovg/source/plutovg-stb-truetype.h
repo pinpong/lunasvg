@@ -1403,8 +1403,8 @@ static int stbtt_InitFont_internal(stbtt_fontinfo *info, unsigned char *data, in
    if (info->glyf) {
       // required for truetype
       if (!info->loca) return 0;
-   } else if (stbtt__find_table(data, fontstart, "CFF2")) {
-      // CFF2 outlines are not supported, metrics and character mapping are
+   } else if (stbtt__find_table(data, fontstart, "CFF2") || stbtt__find_table(data, fontstart, "hvgl")) {
+      // CFF2 and hvgl outlines are not supported, metrics and character mapping are
    } else {
       // initialization for CFF / Type2 fonts (OTF)
       stbtt__buf b, topdict, topdictidx;

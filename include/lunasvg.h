@@ -152,6 +152,44 @@ LUNASVG_API bool lunasvg_add_font_face_from_collection_data(const char* family, 
 typedef const char* (*lunasvg_fallback_font_func_t)(uint32_t codepoint, int weight, bool italic, const char* language, void* closure);
 
 /**
+* @brief Text drawn by the platform, in premultiplied 32-bit pixels in the byte order of `lunasvg::Bitmap`.
+*/
+typedef struct {
+    unsigned char* data; ///< The pixels, allocated with `malloc`, lunasvg frees them.
+    int width; ///< The width in pixels.
+    int height; ///< The height in pixels.
+    int stride; ///< The number of bytes per row.
+    float left; ///< The distance from the pen position to the left edge, in pixels.
+    float top; ///< The distance from the baseline up to the top edge, in pixels.
+} lunasvg_text_image_t;
+
+/**
+* @brief Callback that shapes and draws text in a font whose glyphs lunasvg can't read.
+* @param font_data The data of the font, as it was added to the cache.
+* @param font_index The index of the font face within a font collection.
+* @param text The characters, in logical order.
+* @param length The number of characters.
+* @param size The font size in pixels.
+* @param color The color for glyphs without own colors, as 0xAARRGGBB.
+* @param advance Receives the advance of the text in pixels.
+* @param image Receives the drawn text, or `NULL` if only the advance is needed.
+* @param closure User-defined pointer passed to `lunasvg_set_text_image_func`.
+* @return `true` if the text was shaped, `false` otherwise.
+*/
+typedef bool (*lunasvg_text_image_func_t)(const void* font_data, int font_index, const uint32_t* text, int length, float size, uint32_t color, float* advance, lunasvg_text_image_t* image, void* closure);
+
+/**
+* @brief Sets the callback that shapes and draws text in fonts whose glyphs lunasvg can't read, like hvgl outlines
+* and sbix images other than PNG.
+*
+* Only used when lunasvg is built with text shaping. The callback may be called from any thread that renders.
+*
+* @param func The callback, or `NULL` to remove it.
+* @param closure User-defined pointer passed to the callback.
+*/
+LUNASVG_API void lunasvg_set_text_image_func(lunasvg_text_image_func_t func, void* closure);
+
+/**
 * @brief Sets the callback that selects fonts for characters that no font of the `font-family` list covers.
 *
 * Only used when lunasvg is built with text shaping. The callback may be called from any thread that renders.

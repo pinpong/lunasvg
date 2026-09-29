@@ -428,6 +428,9 @@ public:
 
     ~FontFaceCache();
     void setFallbackFontFunc(lunasvg_fallback_font_func_t func, void* closure);
+    void setTextImageFunc(lunasvg_text_image_func_t func, void* closure);
+    bool hasTextImageFunc() const { return m_textImageFunc.load() != nullptr; }
+    bool getTextImage(const void* data, int index, const std::u32string_view& text, float size, uint32_t color, float* advance, lunasvg_text_image_t* image) const;
     FontFace getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const;
 
 private:
@@ -435,6 +438,8 @@ private:
     plutovg_font_face_cache_t* m_cache;
     std::atomic<lunasvg_fallback_font_func_t> m_fallbackFontFunc = nullptr;
     std::atomic<void*> m_fallbackFontClosure = nullptr;
+    std::atomic<lunasvg_text_image_func_t> m_textImageFunc = nullptr;
+    std::atomic<void*> m_textImageClosure = nullptr;
     friend FontFaceCache* fontFaceCache();
 };
 

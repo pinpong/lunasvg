@@ -3,6 +3,7 @@
 
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
 #include <hb.h>
@@ -467,6 +468,18 @@ void FontFaceCache::setFallbackFontFunc(lunasvg_fallback_font_func_t func, void*
     m_fallbackFontFunc = func;
 }
 
+void FontFaceCache::setTextImageFunc(lunasvg_text_image_func_t func, void* closure)
+{
+    m_textImageClosure = closure;
+    m_textImageFunc = func;
+}
+
+bool FontFaceCache::getTextImage(const void* data, int index, const std::u32string_view& text, float size, uint32_t color, float* advance, lunasvg_text_image_t* image) const
+{
+    auto func = m_textImageFunc.load();
+    return func && func(data, index, reinterpret_cast<const uint32_t*>(text.data()), text.length(), size, color, advance, image, m_textImageClosure.load());
+}
+
 FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, int weight, bool italic, const std::string& language) const
 {
     auto func = m_fallbackFontFunc.load();
@@ -546,9 +559,60 @@ static bool isCommonScript(hb_script_t script)
     return script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED || script == HB_SCRIPT_UNKNOWN;
 }
 
-// `text` is a part of `context`, the characters around it shape its ends, like the joining of Arabic letters
-template<typename GlyphFunc>
-static float shapeText(const Font& font, const std::u32string_view& text, bool rightToLeft, const std::u32string_view& context, GlyphFunc glyphFunc)
+// HarfBuzz hands out the images of sbix and CBDT whatever their format is, only PNG can be decoded
+static bool hasPngImage(hb_font_t* font, hb_codepoint_t glyph)
+{
+    static const char signature[] = {'\x89', 'P', 'N', 'G'};
+    auto png = hb_ot_color_glyph_reference_png(font, glyph);
+    unsigned int length = 0;
+    auto data = hb_blob_get_data(png, &length);
+    auto isPng = length > sizeof(signature) && std::equal(signature, signature + sizeof(signature), data);
+    hb_blob_destroy(png);
+    return isPng;
+}
+
+static bool hasTable(hb_face_t* face, hb_tag_t tag)
+{
+    auto blob = hb_face_reference_table(face, tag);
+    auto length = hb_blob_get_length(blob);
+    hb_blob_destroy(blob);
+    return length > 0;
+}
+
+// hvgl outlines and sbix images other than PNG, like the emjc of Apple Color Emoji, are only decoded by the
+// platform, which then also shapes the text since such fonts can hide their layout tables
+static bool isPlatformFont(hb_font_t* font, hb_codepoint_t codepoint)
+{
+    auto face = hb_font_get_face(font);
+    if(hasTable(face, HB_TAG('h', 'v', 'g', 'l')))
+        return true;
+    hb_codepoint_t glyph = 0;
+    return hasTable(face, HB_TAG('s', 'b', 'i', 'x')) && hb_font_get_nominal_glyph(font, codepoint, &glyph) && !hasPngImage(font, glyph);
+}
+
+static const void* fontData(hb_font_t* font, int& index)
+{
+    auto face = hb_font_get_face(font);
+    auto blob = hb_face_reference_blob(face);
+    auto data = hb_blob_get_data(blob, nullptr);
+    hb_blob_destroy(blob);
+    index = hb_face_get_index(face);
+    return data;
+}
+
+static float measurePlatformText(hb_font_t* font, const std::u32string_view& text, float size)
+{
+    int index = 0;
+    auto data = fontData(font, index);
+    auto advance = 0.f;
+    fontFaceCache()->getTextImage(data, index, text, size, 0, &advance, nullptr);
+    return advance;
+}
+
+// `text` is a part of `context`, the characters around it shape its ends, like the joining of Arabic letters;
+// runs in fonts that only the platform can draw go to `runFunc` with their position
+template<typename GlyphFunc, typename RunFunc>
+static float shapeText(const Font& font, const std::u32string_view& text, bool rightToLeft, const std::u32string_view& context, GlyphFunc glyphFunc, RunFunc runFunc)
 {
     auto bufferText = context.empty() ? text : context;
     size_t textOffset = text.data() - bufferText.data();
@@ -566,8 +630,9 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
     auto findFontIndex = [&](hb_codepoint_t codepoint, const TextRun* lastRun, bool emojiPresentation) {
         if(lastRun && isClusterContinuation(unicodeFuncs, codepoint))
             return lastRun->fontIndex;
+        // only the fonts of the font-family list come before the callback, it decides for the fallback fonts
         hb_codepoint_t glyph = 0;
-        for(size_t index = 0; index < hbFonts.size() && !emojiPresentation; ++index) {
+        for(size_t index = 0; index < font.hbFonts().size() && !emojiPresentation; ++index) {
             if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
                 return index;
             }
@@ -576,7 +641,7 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         static const std::string emojiLanguage("und-Zsye");
         auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.weight(), font.italic(), emojiPresentation ? emojiLanguage : font.language());
         if(fallbackFace.isNull() && emojiPresentation) {
-            for(size_t index = 0; index < hbFonts.size(); ++index) {
+            for(size_t index = 0; index < font.hbFonts().size(); ++index) {
                 if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
                     return index;
                 }
@@ -623,6 +688,13 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
     auto advance = 0.f;
     for(const auto& run : runs) {
         auto hbFont = hbFonts[run.fontIndex].get();
+        if(fontFaceCache()->hasTextImageFunc() && isPlatformFont(hbFont, text[run.startOffset])) {
+            auto runText = text.substr(run.startOffset, run.endOffset - run.startOffset);
+            runFunc(hbFont, runText, advance);
+            advance += measurePlatformText(hbFont, runText, font.size());
+            continue;
+        }
+
         auto scale = font.size() / hb_face_get_upem(hb_font_get_face(hbFont));
         hb_buffer_clear_contents(buffer);
         hb_buffer_add_utf32(buffer, reinterpret_cast<const uint32_t*>(bufferText.data()), bufferText.length(), textOffset + run.startOffset, run.endOffset - run.startOffset);
@@ -697,12 +769,7 @@ static bool isColorGlyph(hb_font_t* font, hb_codepoint_t glyph)
     auto face = hb_font_get_face(font);
     if(hb_ot_color_glyph_has_paint(face, glyph) || hb_ot_color_glyph_get_layers(face, glyph, 0, nullptr, nullptr) > 0)
         return true;
-    if(!hb_ot_color_has_png(face))
-        return false;
-    auto png = hb_ot_color_glyph_reference_png(font, glyph);
-    auto hasPng = hb_blob_get_length(png) > 0;
-    hb_blob_destroy(png);
-    return hasPng;
+    return hb_ot_color_has_png(face) && hasPngImage(font, glyph);
 }
 
 struct GlyphPainter {
@@ -880,10 +947,54 @@ struct ColorGlyph {
     float scale;
 };
 
-// adds the outlines of the glyphs to the path, color glyphs go to `colorGlyphs` if given, with a font reference
-static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft, const std::u32string_view& context, std::vector<ColorGlyph>* colorGlyphs)
+static uint32_t toArgb(const plutovg_color_t& color)
 {
-    shapeText(font, text, rightToLeft, context, [&](hb_font_t* hbFont, uint32_t glyph, float x, float y, float scale) {
+    auto channel = [](float value) { return uint32_t(std::clamp(value, 0.f, 1.f) * 255.f + 0.5f); };
+    return channel(color.a) << 24 | channel(color.r) << 16 | channel(color.g) << 8 | channel(color.b);
+}
+
+struct PlatformRun {
+    hb_font_t* font;
+    std::u32string text;
+    float x;
+    float y;
+    float size;
+};
+
+// draws text of the platform, requested at the pixel size of the canvas so it stays sharp
+static void paintPlatformRun(plutovg_canvas_t* canvas, const PlatformRun& run, const plutovg_color_t& foreground)
+{
+    plutovg_matrix_t matrix;
+    plutovg_canvas_get_matrix(canvas, &matrix);
+    auto pixelScale = std::sqrt(std::abs(matrix.a * matrix.d - matrix.b * matrix.c));
+    if(pixelScale <= 0.f)
+        return;
+    int index = 0;
+    auto data = fontData(run.font, index);
+    auto advance = 0.f;
+    lunasvg_text_image_t image = {};
+    if(!fontFaceCache()->getTextImage(data, index, run.text, run.size * pixelScale, toArgb(foreground), &advance, &image) || image.data == nullptr)
+        return;
+    auto surface = plutovg_surface_create_for_data(image.data, image.width, image.height, image.stride);
+    auto x = run.x + image.left / pixelScale;
+    auto y = run.y - image.top / pixelScale;
+    plutovg_matrix_t textureMatrix;
+    plutovg_matrix_init_translate(&textureMatrix, x, y);
+    plutovg_matrix_scale(&textureMatrix, 1.f / pixelScale, 1.f / pixelScale);
+    plutovg_canvas_save(canvas);
+    plutovg_canvas_set_texture(canvas, surface, PLUTOVG_TEXTURE_TYPE_PLAIN, 1.f, &textureMatrix);
+    plutovg_canvas_fill_rect(canvas, x, y, image.width / pixelScale, image.height / pixelScale);
+    plutovg_canvas_restore(canvas);
+    plutovg_surface_destroy(surface);
+    free(image.data);
+}
+
+// adds the outlines of the glyphs to the path; color glyphs and platform runs go to `colorGlyphs` and
+// `platformRuns` if given, with a font reference
+static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin, bool rightToLeft,
+    const std::u32string_view& context, std::vector<ColorGlyph>* colorGlyphs, std::vector<PlatformRun>* platformRuns)
+{
+    auto glyphFunc = [&](hb_font_t* hbFont, uint32_t glyph, float x, float y, float scale) {
         if(colorGlyphs && isColorGlyph(hbFont, glyph)) {
             colorGlyphs->push_back({hb_font_reference(hbFont), glyph, origin.x + x, origin.y - y, scale});
             return;
@@ -891,7 +1002,15 @@ static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, c
 
         GlyphOutline outline = {canvas, origin.x + x, origin.y - y, scale, -scale};
         hb_font_draw_glyph(hbFont, glyph, glyphDrawFuncs(), &outline);
-    });
+    };
+
+    auto runFunc = [&](hb_font_t* hbFont, const std::u32string_view& runText, float x) {
+        if(platformRuns) {
+            platformRuns->push_back({hb_font_reference(hbFont), std::u32string(runText), origin.x + x, origin.y, font.size()});
+        }
+    };
+
+    shapeText(font, text, rightToLeft, context, glyphFunc, runFunc);
 }
 
 #endif // LUNASVG_ENABLE_TEXT_SHAPING
@@ -943,7 +1062,7 @@ float Font::measureText(const std::u32string_view& text, [[maybe_unused]] bool r
 {
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!m_hbFonts.empty())
-        return shapeText(*this, text, rightToLeft, context, [](hb_font_t*, uint32_t, float, float, float) {});
+        return shapeText(*this, text, rightToLeft, context, [](hb_font_t*, uint32_t, float, float, float) {}, [](hb_font_t*, const std::u32string_view&, float) {});
 #endif
     if(m_size > 0.f && !m_face.isNull())
         return plutovg_font_face_text_extents(m_face.get(), m_size, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, nullptr);
@@ -1030,13 +1149,19 @@ void Canvas::fillText(const std::u32string_view& text, const Font& font, const P
     if(!font.hbFonts().empty()) {
         plutovg_canvas_new_path(m_canvas);
         std::vector<ColorGlyph> colorGlyphs;
-        addText(m_canvas, text, font, origin, rightToLeft, context, &colorGlyphs);
+        std::vector<PlatformRun> platformRuns;
+        addText(m_canvas, text, font, origin, rightToLeft, context, &colorGlyphs, &platformRuns);
         plutovg_canvas_fill(m_canvas);
         plutovg_color_t foreground = {0.f, 0.f, 0.f, 1.f};
         plutovg_canvas_get_paint(m_canvas, &foreground);
         for(const auto& colorGlyph : colorGlyphs) {
             paintColorGlyph(m_canvas, colorGlyph.font, colorGlyph.glyph, colorGlyph.x, colorGlyph.y, colorGlyph.scale, foreground);
             hb_font_destroy(colorGlyph.font);
+        }
+
+        for(const auto& platformRun : platformRuns) {
+            paintPlatformRun(m_canvas, platformRun, foreground);
+            hb_font_destroy(platformRun.font);
         }
         return;
     }
@@ -1059,7 +1184,7 @@ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, cons
 #ifdef LUNASVG_ENABLE_TEXT_SHAPING
     if(!font.hbFonts().empty()) {
         plutovg_canvas_new_path(m_canvas);
-        addText(m_canvas, text, font, origin, rightToLeft, context, nullptr);
+        addText(m_canvas, text, font, origin, rightToLeft, context, nullptr, nullptr);
         plutovg_canvas_stroke(m_canvas);
         return;
     }
