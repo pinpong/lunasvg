@@ -2,7 +2,9 @@
 #define LUNASVG_GRAPHICS_H
 
 #include <plutovg.h>
+#include <lunasvg.h>
 
+#include <atomic>
 #include <cstdint>
 #include <algorithm>
 #include <utility>
@@ -425,10 +427,14 @@ public:
     FontFace getFontFace(const std::string& family, bool bold, bool italic) const;
 
     ~FontFaceCache();
+    void setFallbackFontFunc(lunasvg_fallback_font_func_t func, void* closure);
+    FontFace getFallbackFontFace(uint32_t codepoint, bool bold, bool italic) const;
 
 private:
     FontFaceCache();
     plutovg_font_face_cache_t* m_cache;
+    std::atomic<lunasvg_fallback_font_func_t> m_fallbackFontFunc = nullptr;
+    std::atomic<void*> m_fallbackFontClosure = nullptr;
     friend FontFaceCache* fontFaceCache();
 };
 
@@ -437,7 +443,7 @@ FontFaceCache* fontFaceCache();
 class Font {
 public:
     Font() = default;
-    Font(const FontFace& face, float size, const std::vector<FontFace>& fallbackFaces = {});
+    Font(const FontFace& face, float size, bool bold = false, bool italic = false, const std::vector<FontFace>& fallbackFaces = {});
 
     float ascent() const { return m_ascent; }
     float descent() const { return m_descent; }
@@ -449,6 +455,8 @@ public:
 
     const FontFace& face() const { return m_face; }
     float size() const { return m_size; }
+    bool bold() const { return m_bold; }
+    bool italic() const { return m_italic; }
 
     const std::vector<std::shared_ptr<hb_font_t>>& hbFonts() const { return m_hbFonts; }
 
@@ -458,6 +466,8 @@ private:
     FontFace m_face;
     std::vector<std::shared_ptr<hb_font_t>> m_hbFonts;
     float m_size = 0.f;
+    bool m_bold = false;
+    bool m_italic = false;
     float m_ascent = 0.f;
     float m_descent = 0.f;
     float m_lineGap = 0.f;

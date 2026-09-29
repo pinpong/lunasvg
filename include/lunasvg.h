@@ -126,6 +126,26 @@ LUNASVG_API bool lunasvg_add_font_face_from_file(const char* family, bool bold, 
 */
 LUNASVG_API bool lunasvg_add_font_face_from_data(const char* family, bool bold, bool italic, const void* data, size_t length, lunasvg_destroy_func_t destroy_func, void* closure);
 
+/**
+* @brief Callback that selects a font for a character that no font of the `font-family` list covers.
+* @param codepoint The Unicode code point of the character.
+* @param bold `true` if a bold font is requested, `false` otherwise.
+* @param italic `true` if an italic font is requested, `false` otherwise.
+* @param closure User-defined pointer passed to `lunasvg_set_fallback_font_func`.
+* @return The family of a font face in the cache that covers the character, or `NULL`.
+*/
+typedef const char* (*lunasvg_fallback_font_func_t)(uint32_t codepoint, bool bold, bool italic, void* closure);
+
+/**
+* @brief Sets the callback that selects fonts for characters that no font of the `font-family` list covers.
+*
+* Only used when lunasvg is built with text shaping. The callback may be called from any thread that renders.
+*
+* @param func The callback, or `NULL` to remove it.
+* @param closure User-defined pointer passed to the callback.
+*/
+LUNASVG_API void lunasvg_set_fallback_font_func(lunasvg_fallback_font_func_t func, void* closure);
+
 #ifdef __cplusplus
 }
 #endif

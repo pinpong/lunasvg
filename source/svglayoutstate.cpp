@@ -617,7 +617,7 @@ Font SVGLayoutState::font() const
         fallbackFaces.push_back(fontFaceCache()->getFontFace(emptyString, bold, italic));
     }
 
-    return Font(face, m_font_size, fallbackFaces);
+    return Font(face, m_font_size, bold, italic, fallbackFaces);
 }
 
 } // namespace lunasvg

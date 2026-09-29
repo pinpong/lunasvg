@@ -460,6 +460,25 @@ FontFaceCache::~FontFaceCache()
     plutovg_font_face_cache_destroy(m_cache);
 }
 
+void FontFaceCache::setFallbackFontFunc(lunasvg_fallback_font_func_t func, void* closure)
+{
+    m_fallbackFontClosure = closure;
+    m_fallbackFontFunc = func;
+}
+
+FontFace FontFaceCache::getFallbackFontFace(uint32_t codepoint, bool bold, bool italic) const
+{
+    auto func = m_fallbackFontFunc.load();
+    if(func == nullptr)
+        return FontFace();
+    auto family = func(codepoint, bold, italic, m_fallbackFontClosure.load());
+    if(family == nullptr)
+        return FontFace();
+    if(auto face = plutovg_font_face_cache_get(m_cache, family, bold, italic))
+        return FontFace(face);
+    return FontFace();
+}
+
 FontFaceCache::FontFaceCache()
     : m_cache(plutovg_font_face_cache_create())
 {
@@ -518,7 +537,8 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         size_t fontIndex;
     };
 
-    const auto& hbFonts = font.hbFonts();
+    auto hbFonts = font.hbFonts();
+    std::vector<FontFace> fallbackFaces;
     auto unicodeFuncs = hb_unicode_funcs_get_default();
     auto findFontIndex = [&](hb_codepoint_t codepoint, const TextRun* lastRun) {
         if(lastRun && isClusterContinuation(unicodeFuncs, codepoint))
@@ -527,6 +547,22 @@ static float shapeText(const Font& font, const std::u32string_view& text, bool r
         for(size_t index = 0; index < hbFonts.size(); ++index) {
             if(hb_font_get_nominal_glyph(hbFonts[index].get(), codepoint, &glyph)) {
                 return index;
+            }
+        }
+
+        auto fallbackFace = fontFaceCache()->getFallbackFontFace(codepoint, font.bold(), font.italic());
+        if(!fallbackFace.isNull()) {
+            for(size_t index = 0; index < fallbackFaces.size(); ++index) {
+                if(fallbackFaces[index].get() == fallbackFace.get()) {
+                    return font.hbFonts().size() + index;
+                }
+            }
+
+            auto hbFont = createHbFont(fallbackFace.get());
+            if(hb_font_get_nominal_glyph(hbFont.get(), codepoint, &glyph)) {
+                fallbackFaces.push_back(std::move(fallbackFace));
+                hbFonts.push_back(std::move(hbFont));
+                return hbFonts.size() - 1;
             }
         }
 
@@ -630,8 +666,8 @@ static void addText(plutovg_canvas_t* canvas, const std::u32string_view& text, c
 
 #endif // LUNASVG_ENABLE_TEXT_SHAPING
 
-Font::Font(const FontFace& face, float size, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
-    : m_face(face), m_size(size)
+Font::Font(const FontFace& face, float size, bool bold, bool italic, [[maybe_unused]] const std::vector<FontFace>& fallbackFaces)
+    : m_face(face), m_size(size), m_bold(bold), m_italic(italic)
 {
     if(m_size > 0.f && !m_face.isNull()) {
         plutovg_font_face_get_metrics(m_face.get(), m_size, &m_ascent, &m_descent, &m_lineGap, nullptr);
