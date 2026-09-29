@@ -40,9 +40,17 @@ if get_option('external-resources').disabled()
     lunasvg_cpp_args += ['-DLUNASVG_DISABLE_EXTERNAL_RESOURCES']
 endif
 
+lunasvg_deps = [plutovg_dep]
+harfbuzz_dep = dependency('harfbuzz', version: '>=7.0.0', required: get_option('text-shaping'))
+sheenbidi_dep = dependency('sheenbidi', version: '>=2.9.0', required: get_option('text-shaping'))
+if harfbuzz_dep.found() and sheenbidi_dep.found()
+    lunasvg_deps += [harfbuzz_dep, sheenbidi_dep]
+    lunasvg_cpp_args += ['-DLUNASVG_ENABLE_TEXT_SHAPING']
+endif
+
 lunasvg_lib = library('lunasvg', lunasvg_sources,
     include_directories: include_directories('include', 'source'),
-    dependencies: plutovg_dep,
+    dependencies: lunasvg_deps,
     version: meson.project_version(),
     cpp_args: lunasvg_cpp_args,
     gnu_symbol_visibility: 'hidden',

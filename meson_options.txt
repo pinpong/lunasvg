@@ -7,6 +7,12 @@ option('load-system-fonts',
     description : 'Enable automatic loading of fonts from system directories'
 )
 
+option('text-shaping',
+    type : 'feature',
+    value : 'disabled',
+    description : 'Enable text shaping with HarfBuzz and bidi reordering with SheenBidi'
+)
+
 option('external-resources',
     type : 'feature',
     value : 'auto',
